@@ -1,4 +1,3 @@
-
 /// A trait for bit matrices.
 pub trait BitMatrix {
     /// The number of rows and columns in the matrix.
@@ -15,16 +14,32 @@ pub trait BitMatrix {
     type Row;
 
     /// Returns the number of ´1´-bits in the matrix.
+    /// ```
+    /// use bitmatrix::BitMatrix;
+    ///
+    /// type BitMatrix8x8 = [u8; 8];
+    ///
+    /// let identity = BitMatrix8x8::IDENTITY;
+    /// assert_eq!(identity.count_ones(), 8);
+    /// ```
     fn count_ones(&self) -> u32;
 
     /// Returns the number of ´0´-bits in the matrix.
+    /// ```
+    /// use bitmatrix::BitMatrix;
+    ///
+    /// type BitMatrix8x8 = [u8; 8];
+    ///
+    /// let identity = BitMatrix8x8::IDENTITY;
+    /// assert_eq!(identity.count_zeros(), 8 * 8 - 8);
+    /// ```
     fn count_zeros(&self) -> u32;
 
     /// Multiplies the matrix by `rhs`.
     ///
     /// ```
     /// use bitmatrix::BitMatrix;
-    /// 
+    ///
     /// type BitMatrix8x8 = [u8; 8];
     /// let matrix = [
     ///     0b_1_1_1_1_1_1_1_1,
@@ -36,29 +51,141 @@ pub trait BitMatrix {
     ///     0b_0_0_0_0_0_0_1_1,
     ///     0b_0_0_0_0_0_0_0_1,
     /// ];
-    /// assert_eq!(matrix * BitMatrix8x8::IDENTITY, matrix);
+    /// assert_eq!(matrix.matmul(&BitMatrix::IDENTITY), matrix);
     /// ```
     fn matmul(self, rhs: &Self) -> Self;
 
     /// Reverses the order of the rows.
+    /// ```
+    /// use bitmatrix::BitMatrix;
+    ///
+    /// let mut matrix = [
+    ///     0b_1_1_1_1_1_1_1_1,
+    ///     0b_0_1_1_1_1_1_1_1,
+    ///     0b_0_0_1_1_1_1_1_1,
+    ///     0b_0_0_0_1_1_1_1_1,
+    ///     0b_0_0_0_0_1_1_1_1,
+    ///     0b_0_0_0_0_0_1_1_1,
+    ///     0b_0_0_0_0_0_0_1_1,
+    ///     0b_0_0_0_0_0_0_0_1,
+    /// ];
+    /// matrix.reverse_rows();
+    /// assert_eq!(
+    ///     matrix,
+    ///     [
+    ///         0b_0_0_0_0_0_0_0_1,
+    ///         0b_0_0_0_0_0_0_1_1,
+    ///         0b_0_0_0_0_0_1_1_1,
+    ///         0b_0_0_0_0_1_1_1_1,
+    ///         0b_0_0_0_1_1_1_1_1,
+    ///         0b_0_0_1_1_1_1_1_1,
+    ///         0b_0_1_1_1_1_1_1_1,
+    ///         0b_1_1_1_1_1_1_1_1,
+    ///     ]
+    /// );
+    /// ```
     fn reverse_rows(&mut self);
 
     /// Reverses the order of the columns.
+    /// ```
+    /// use bitmatrix::BitMatrix;
+    ///
+    /// let mut matrix = [
+    ///     0b_1_0_0_0_0_0_0_0,
+    ///     0b_1_1_0_0_0_0_0_0,
+    ///     0b_1_1_1_0_0_0_0_0,
+    ///     0b_1_1_1_1_0_0_0_0,
+    ///     0b_1_1_1_1_1_0_0_0,
+    ///     0b_1_1_1_1_1_1_0_0,
+    ///     0b_1_1_1_1_1_1_1_0,
+    ///     0b_1_1_1_1_1_1_1_1,
+    /// ];
+    /// matrix.reverse_columns();
+    /// assert_eq!(
+    ///     matrix,
+    ///     [
+    ///         0b_0_0_0_0_0_0_0_1,
+    ///         0b_0_0_0_0_0_0_1_1,
+    ///         0b_0_0_0_0_0_1_1_1,
+    ///         0b_0_0_0_0_1_1_1_1,
+    ///         0b_0_0_0_1_1_1_1_1,
+    ///         0b_0_0_1_1_1_1_1_1,
+    ///         0b_0_1_1_1_1_1_1_1,
+    ///         0b_1_1_1_1_1_1_1_1,
+    ///     ]
+    /// );
+    /// ```
     fn reverse_columns(&mut self);
 
     /// Sorts the bits of each row so that all ´1´-bits in a row are moved to the most significant
     /// positions.
+    /// ```
+    /// use bitmatrix::BitMatrix;
+    ///
+    /// let mut matrix = [
+    ///     0b_0_0_0_1_0_0_0_0,
+    ///     0b_0_1_0_0_0_1_0_0,
+    ///     0b_0_0_1_0_1_0_1_0,
+    ///     0b_1_0_1_1_0_1_0_0,
+    ///     0b_0_1_1_0_1_1_1_0,
+    ///     0b_0_1_1_1_1_1_0_1,
+    ///     0b_0_1_1_1_1_1_1_1,
+    ///     0b_1_1_1_1_1_1_1_1,
+    /// ];
+    /// matrix.sort_row_bits();
+    /// assert_eq!(
+    ///     matrix,
+    ///     [
+    ///         0b_1_0_0_0_0_0_0_0,
+    ///         0b_1_1_0_0_0_0_0_0,
+    ///         0b_1_1_1_0_0_0_0_0,
+    ///         0b_1_1_1_1_0_0_0_0,
+    ///         0b_1_1_1_1_1_0_0_0,
+    ///         0b_1_1_1_1_1_1_0_0,
+    ///         0b_1_1_1_1_1_1_1_0,
+    ///         0b_1_1_1_1_1_1_1_1,
+    ///     ]
+    /// );
+    /// ```
     fn sort_row_bits(&mut self);
 
     /// Sorts the bits of each column so that all ´1´-bits in a column are moved to the last rows of
     /// the matrix.
+    /// ```
+    /// use bitmatrix::BitMatrix;
+    ///
+    /// let mut matrix = [
+    ///     0b_0_0_0_1_0_0_0_0,
+    ///     0b_0_1_0_0_0_1_0_0,
+    ///     0b_0_0_1_0_1_0_1_0,
+    ///     0b_1_0_1_1_0_1_0_0,
+    ///     0b_0_1_1_0_1_0_1_0,
+    ///     0b_0_1_1_1_1_1_0_1,
+    ///     0b_0_1_1_1_1_1_1_1,
+    ///     0b_1_1_1_1_1_1_1_1,
+    /// ];
+    /// matrix.sort_column_bits();
+    /// assert_eq!(
+    ///     matrix,
+    ///     [
+    ///         0b_0_0_0_0_0_0_0_0,
+    ///         0b_0_0_0_0_0_0_0_0,
+    ///         0b_0_0_1_0_0_0_0_0,
+    ///         0b_0_1_1_1_1_1_0_0,
+    ///         0b_0_1_1_1_1_1_1_0,
+    ///         0b_0_1_1_1_1_1_1_1,
+    ///         0b_1_1_1_1_1_1_1_1,
+    ///         0b_1_1_1_1_1_1_1_1,
+    ///     ]
+    /// );
+    /// ```
     fn sort_column_bits(&mut self);
 
     /// Transposes the matrix in-place.
     ///
     /// ```
     /// use bitmatrix::BitMatrix;
-    /// 
+    ///
     /// let mut matrix = [
     ///     0b_1_0_0_0_0_0_0_0,
     ///     0b_1_1_0_0_0_0_0_0,
@@ -82,7 +209,7 @@ pub trait BitMatrix {
     ///         0b_0_0_0_0_0_1_1_1,
     ///         0b_0_0_0_0_0_0_1_1,
     ///         0b_0_0_0_0_0_0_0_1
-    ///     ])
+    ///     ]
     /// );
     /// ```
     fn transpose(&mut self);
@@ -154,26 +281,31 @@ impl BitMatrix for [u8; 8] {
 
     fn sort_row_bits(&mut self) {
         for row in self.iter_mut() {
-            let ones = row.count_ones();
-            let (x, overflow) = row.overflowing_shl(ones);
-            *row = (x - 1) * (!overflow as u8);
+            let shift = row.count_zeros();
+            let (x, overflow) = u8::MAX.overflowing_shl(shift);
+            *row = x * (!overflow as u8);
         }
     }
 
     fn sort_column_bits(&mut self) {
         let mut mask = 0;
         let mut unsorted = 0;
+        let mut temp = *self;
         for row in &*self {
             mask |= *row;
             unsorted |= *row ^ mask;
         }
         while unsorted > 0 {
             mask = 1 << unsorted.trailing_zeros();
-            if let Some(l) = self.iter().position(|row| row & mask != 0) {
-                if let Some(x) = self[l..].iter().rposition(|row| row & mask == 0) {
+            if let Some(l) = temp.iter().position(|row| row & mask != 0) {
+                if let Some(x) = temp[l..].iter().rposition(|row| row & mask == 0) {
                     let r = x + l + 1;
-                    self[l..r].sort_unstable_by_key(|row| row & mask);
+                    temp[l..r].sort_unstable_by_key(|row| row & mask);
                 }
+            }
+            for (row, bits) in self.iter_mut().zip(temp.iter()) {
+                *row &= !(mask);
+                *row |= bits & mask;
             }
             unsorted &= !mask;
         }
@@ -267,6 +399,62 @@ mod tests {
                 0b_0_0_0_0_0_1_1_1,
                 0b_0_0_0_0_0_0_1_1,
                 0b_0_0_0_0_0_0_0_1,
+            ]
+        );
+    }
+
+    #[test]
+    fn sort_row_bits_u8() {
+        let mut matrix = [
+            0b_0_0_0_0_0_0_0_1,
+            0b_0_1_0_0_0_1_0_0,
+            0b_0_0_1_0_1_0_1_0,
+            0b_1_0_1_1_0_1_0_0,
+            0b_0_1_1_0_1_1_1_0,
+            0b_0_1_1_1_1_1_0_1,
+            0b_0_1_1_1_1_1_1_1,
+            0b_1_1_1_1_1_1_1_1,
+        ];
+        matrix.sort_row_bits();
+        assert_eq!(
+            matrix,
+            [
+                0b_1_0_0_0_0_0_0_0,
+                0b_1_1_0_0_0_0_0_0,
+                0b_1_1_1_0_0_0_0_0,
+                0b_1_1_1_1_0_0_0_0,
+                0b_1_1_1_1_1_0_0_0,
+                0b_1_1_1_1_1_1_0_0,
+                0b_1_1_1_1_1_1_1_0,
+                0b_1_1_1_1_1_1_1_1,
+            ]
+        );
+    }
+
+    #[test]
+    fn sort_column_bits_u8() {
+        let mut matrix = [
+            0b_0_0_0_1_0_0_0_0,
+            0b_0_1_0_0_0_1_0_0,
+            0b_0_0_1_0_1_0_1_0,
+            0b_1_0_1_1_0_1_0_0,
+            0b_0_1_1_0_1_0_1_0,
+            0b_0_1_1_1_1_1_0_1,
+            0b_0_1_1_1_1_1_1_1,
+            0b_1_1_1_1_1_1_1_1,
+        ];
+        matrix.sort_column_bits();
+        assert_eq!(
+            matrix,
+            [
+                0b_0_0_0_0_0_0_0_0,
+                0b_0_0_0_0_0_0_0_0,
+                0b_0_0_1_0_0_0_0_0,
+                0b_0_1_1_1_1_1_0_0,
+                0b_0_1_1_1_1_1_1_0,
+                0b_0_1_1_1_1_1_1_1,
+                0b_1_1_1_1_1_1_1_1,
+                0b_1_1_1_1_1_1_1_1,
             ]
         );
     }
