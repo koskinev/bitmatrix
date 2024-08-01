@@ -1,4 +1,4 @@
-use crate::shuffle::BitShuffle;
+use crate::shuffle::BitOps;
 
 /// A trait for bit matrices.
 pub trait BitMatrix {
@@ -13,7 +13,7 @@ pub trait BitMatrix {
     const ZERO: Self;
 
     /// The type used to represent a row in the matrix.
-    type Row;
+    type RowRepr;
 
     /// Returns the number of ´1´-bits in the matrix.
     /// ```
@@ -140,27 +140,27 @@ pub trait BitMatrix {
     /// use bitmatrix::BitMatrix;
     ///
     /// let mut matrix = [
-    ///     0b_0_0_0_1_0_0_0_0,
-    ///     0b_0_1_0_0_0_1_0_0,
-    ///     0b_0_0_1_0_1_0_1_0,
-    ///     0b_1_0_1_1_0_1_0_0,
-    ///     0b_0_1_1_0_1_1_1_0,
-    ///     0b_0_1_1_1_1_1_0_1,
-    ///     0b_0_1_1_1_1_1_1_1,
     ///     0b_1_1_1_1_1_1_1_1,
+    ///     0b_1_1_1_1_1_1_1_1,
+    ///     0b_0_0_0_1_1_0_0_0,
+    ///     0b_0_0_0_1_1_0_0_0,
+    ///     0b_0_0_0_1_1_0_0_0,
+    ///     0b_0_0_0_1_1_0_0_0,
+    ///     0b_0_0_0_1_1_0_0_0,
+    ///     0b_0_0_0_1_1_0_0_0,
     /// ];
     /// matrix.sort_rows();
     /// assert_eq!(
     ///     matrix,
     ///     [
-    ///         0b_1_0_0_0_0_0_0_0,
-    ///         0b_1_1_0_0_0_0_0_0,
-    ///         0b_1_1_1_0_0_0_0_0,
-    ///         0b_1_1_1_1_0_0_0_0,
-    ///         0b_1_1_1_1_1_0_0_0,
-    ///         0b_1_1_1_1_1_1_0_0,
-    ///         0b_1_1_1_1_1_1_1_0,
-    ///         0b_1_1_1_1_1_1_1_1,
+    ///         0b__1_1_1_1_1_1_1_1,
+    ///         0b__1_1_1_1_1_1_1_1,
+    ///         0b__1_1_0_0_0_0_0_0,
+    ///         0b__1_1_0_0_0_0_0_0,
+    ///         0b__1_1_0_0_0_0_0_0,
+    ///         0b__1_1_0_0_0_0_0_0,
+    ///         0b__1_1_0_0_0_0_0_0,
+    ///         0b__1_1_0_0_0_0_0_0,
     ///     ]
     /// );
     /// ```
@@ -172,25 +172,25 @@ pub trait BitMatrix {
     /// use bitmatrix::BitMatrix;
     ///
     /// let mut matrix = [
-    ///     0b_0_0_0_1_0_0_0_0,
-    ///     0b_0_1_0_0_0_1_0_0,
-    ///     0b_0_0_1_0_1_0_1_0,
-    ///     0b_1_0_1_1_0_1_0_0,
-    ///     0b_0_1_1_0_1_0_1_0,
-    ///     0b_0_1_1_1_1_1_0_1,
-    ///     0b_0_1_1_1_1_1_1_1,
     ///     0b_1_1_1_1_1_1_1_1,
+    ///     0b_1_1_1_1_1_1_1_1,
+    ///     0b_0_0_0_1_1_0_0_0,
+    ///     0b_0_0_0_1_1_0_0_0,
+    ///     0b_0_0_0_1_1_0_0_0,
+    ///     0b_0_0_0_1_1_0_0_0,
+    ///     0b_0_0_0_1_1_0_0_0,
+    ///     0b_0_0_0_1_1_0_0_0,
     /// ];
     /// matrix.sort_columns();
     /// assert_eq!(
     ///     matrix,
     ///     [
-    ///         0b_0_0_0_0_0_0_0_0,
-    ///         0b_0_0_0_0_0_0_0_0,
-    ///         0b_0_0_1_0_0_0_0_0,
-    ///         0b_0_1_1_1_1_1_0_0,
-    ///         0b_0_1_1_1_1_1_1_0,
-    ///         0b_0_1_1_1_1_1_1_1,
+    ///         0b_0_0_0_1_1_0_0_0,
+    ///         0b_0_0_0_1_1_0_0_0,
+    ///         0b_0_0_0_1_1_0_0_0,
+    ///         0b_0_0_0_1_1_0_0_0,
+    ///         0b_0_0_0_1_1_0_0_0,
+    ///         0b_0_0_0_1_1_0_0_0,
     ///         0b_1_1_1_1_1_1_1_1,
     ///         0b_1_1_1_1_1_1_1_1,
     ///     ]
@@ -244,18 +244,9 @@ pub trait BitMatrix {
 }
 
 impl BitMatrix for [u8; 8] {
-    type Row = u8;
+    type RowRepr = u8;
 
-    const IDENTITY: Self = [
-        0b_0_0_0_0_0_0_0_1,
-        0b_0_0_0_0_0_0_1_0,
-        0b_0_0_0_0_0_1_0_0,
-        0b_0_0_0_0_1_0_0_0,
-        0b_0_0_0_1_0_0_0_0,
-        0b_0_0_1_0_0_0_0_0,
-        0b_0_1_0_0_0_0_0_0,
-        0b_1_0_0_0_0_0_0_0,
-    ];
+    const IDENTITY: Self = [0x1, 0x2, 0x4, 0x8, 0x10, 0x20, 0x40, 0x80];
     const SIZE: (usize, usize) = (8, 8);
     const ZERO: Self = [0; 8];
 
@@ -304,8 +295,8 @@ impl BitMatrix for [u8; 8] {
     fn sort_rows(&mut self) {
         for row in self.iter_mut() {
             let shift = row.count_zeros();
-            let (x, overflow) = u8::MAX.overflowing_shl(shift);
-            *row = x * (!overflow as u8);
+            let (x, overflow) = Self::RowRepr::MAX.overflowing_shl(shift);
+            *row = x * (!overflow as Self::RowRepr);
         }
     }
 
@@ -362,6 +353,151 @@ impl BitMatrix for [u8; 8] {
     }
 }
 
+impl BitMatrix for [u16; 16] {
+    type RowRepr = u16;
+
+    const IDENTITY: Self = [
+        0x1, 0x2, 0x4, 0x8, 0x10, 0x20, 0x40, 0x80, 0x100, 0x200, 0x400, 0x800, 0x1000, 0x2000,
+        0x4000, 0x8000,
+    ];
+    const SIZE: (usize, usize) = (16, 16);
+    const ZERO: Self = [0; 16];
+
+    fn count_ones(&self) -> u32 {
+        self.iter().fold(0, |acc, row| acc + row.count_ones())
+    }
+
+    fn count_zeros(&self) -> u32 {
+        self.iter().fold(0, |acc, row| acc + row.count_zeros())
+    }
+
+    fn get(&self, row: usize, col: usize) -> u8 {
+        ((self[row] >> col) & 1) as u8
+    }
+
+    fn matmul(self, rhs: &Self) -> Self {
+        todo!()
+    }
+
+    fn reverse_rows(&mut self) {
+        self.reverse();
+    }
+
+    fn reverse_columns(&mut self) {
+        for row in self.iter_mut() {
+            *row = row.reverse_bits();
+        }
+    }
+
+    fn sort_rows(&mut self) {
+        for row in self.iter_mut() {
+            let shift = row.count_zeros();
+            let (x, overflow) = Self::RowRepr::MAX.overflowing_shl(shift);
+            *row = x * (!overflow as Self::RowRepr);
+        }
+    }
+
+    fn sort_columns(&mut self) {
+        let mut mask = 0;
+        let mut unsorted = 0;
+        let mut temp = *self;
+        for row in &*self {
+            mask |= *row;
+            unsorted |= *row ^ mask;
+        }
+        while unsorted > 0 {
+            mask = 1 << unsorted.trailing_zeros();
+            if let Some(l) = temp.iter().position(|row| row & mask != 0) {
+                if let Some(x) = temp[l..].iter().rposition(|row| row & mask == 0) {
+                    let r = x + l + 1;
+                    temp[l..r].sort_unstable_by_key(|row| row & mask);
+                }
+            }
+            for (row, bits) in self.iter_mut().zip(temp.iter()) {
+                *row &= !(mask);
+                *row |= bits & mask;
+            }
+            unsorted &= !mask;
+        }
+    }
+
+    fn transpose(&mut self) {
+
+        #[rustfmt::skip]
+        let [
+            a00, a01, a02, a03, 
+            a04, a05, a06, a07, 
+            a08, a09, a10, a11, 
+            a12, a13, a14, a15
+        ] = self;
+        
+        let mut mask = u16::MAX;
+    
+        macro_rules! rot_exchange {
+            ($a:expr, $b:expr, $rot:expr) => {
+                *$b = $b.rotate_right($rot);
+                (*$a, *$b) = $a.exchange(*$b, mask);
+            };
+        }
+        
+        mask ^= mask << 8;
+        rot_exchange!(a00, a08, 8);
+        rot_exchange!(a01, a09, 8);
+        rot_exchange!(a02, a10, 8);
+        rot_exchange!(a03, a11, 8);
+        rot_exchange!(a04, a12, 8);
+        rot_exchange!(a05, a13, 8);
+        rot_exchange!(a06, a14, 8);
+        rot_exchange!(a07, a15, 8);
+
+        mask ^= mask << 4;
+        rot_exchange!(a00, a04, 4);
+        rot_exchange!(a01, a05, 4);
+        rot_exchange!(a02, a06, 4);
+        rot_exchange!(a03, a07, 4);
+        rot_exchange!(a08, a12, 4);
+        rot_exchange!(a09, a13, 4);
+        rot_exchange!(a10, a14, 4);
+        rot_exchange!(a11, a15, 4);
+
+        mask ^= mask << 2;
+        rot_exchange!(a00, a02, 2);
+        rot_exchange!(a01, a03, 2);
+        rot_exchange!(a04, a06, 2);
+        rot_exchange!(a05, a07, 2);
+        rot_exchange!(a08, a10, 2);
+        rot_exchange!(a09, a11, 2);
+        rot_exchange!(a12, a14, 2);
+        rot_exchange!(a13, a15, 2);
+
+        mask ^= mask << 1;
+        rot_exchange!(a00, a01, 1);
+        rot_exchange!(a02, a03, 1);
+        rot_exchange!(a04, a05, 1);
+        rot_exchange!(a06, a07, 1);
+        rot_exchange!(a08, a09, 1);
+        rot_exchange!(a10, a11, 1);
+        rot_exchange!(a12, a13, 1);
+        rot_exchange!(a14, a15, 1);
+
+        *a01 = a01.rotate_left(1);
+        *a02 = a02.rotate_left(2);
+        *a03 = a03.rotate_left(3);
+        *a04 = a04.rotate_left(4);
+        *a05 = a05.rotate_left(5);
+        *a06 = a06.rotate_left(6);
+        *a07 = a07.rotate_left(7);
+        *a08 = a08.rotate_left(8);
+        *a09 = a09.rotate_left(9);
+        *a10 = a10.rotate_left(10);
+        *a11 = a11.rotate_left(11);
+        *a12 = a12.rotate_left(12);
+        *a13 = a13.rotate_left(13);
+        *a14 = a14.rotate_left(14);
+        *a15 = a15.rotate_left(15);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use core::array;
@@ -383,8 +519,8 @@ mod tests {
     #[test]
     fn transpose_8x8() {
         let mut matrix = [
-            0b_1_1_1_1_1_1_1_1,
-            0b_1_1_1_1_1_1_1_1,
+            0b_1_1_1_1_1_0_1_1,
+            0b_1_1_1_1_1_0_1_1,
             0b_0_0_0_1_1_0_0_0,
             0b_0_0_0_1_1_0_0_0,
             0b_0_0_0_1_1_0_0_0,
@@ -400,12 +536,68 @@ mod tests {
             [
                 0b_0_0_0_0_0_0_1_1,
                 0b_0_0_0_0_0_0_1_1,
-                0b_0_0_0_0_0_0_1_1,
+                0b_0_0_0_0_0_0_0_0,
                 0b_1_1_1_1_1_1_1_1,
                 0b_1_1_1_1_1_1_1_1,
                 0b_0_0_0_0_0_0_1_1,
                 0b_0_0_0_0_0_0_1_1,
                 0b_0_0_0_0_0_0_1_1,
+            ]
+        );
+
+        let iters = 1000;
+        let mut rng: WyRng = Default::default();
+        for _ in 0..iters {
+            let matrix: [u8; 8] = array::from_fn(|_| rng.u8());
+            let transpose = matrix.transposed();
+            let i = rng.bounded_usize(0, 8);
+            let j = rng.bounded_usize(0, 8);
+            assert_eq!(matrix.get(i, j), transpose.get(j, i));
+        }
+    }
+
+    #[test]
+    fn transpose_16x16() {
+        let mut matrix = [
+            0b_1_1_1_1_1_1_1_1_1_1_0_0_1_1_1_1,
+            0b_1_1_1_1_1_1_1_1_1_1_0_0_1_1_1_1,
+            0b_1_1_1_1_1_1_1_1_1_1_0_0_1_1_1_1,
+            0b_1_1_1_1_1_1_1_1_1_1_0_0_1_1_1_1,
+            0b_0_0_0_0_0_0_1_1_1_1_0_0_0_0_0_0,
+            0b_0_0_0_0_0_0_1_1_1_1_0_0_0_0_0_0,
+            0b_0_0_0_0_0_0_1_1_1_1_0_0_0_0_0_0,
+            0b_0_0_0_0_0_0_1_1_1_1_0_0_0_0_0_0,
+            0b_0_0_0_0_0_0_1_1_1_1_0_0_0_0_0_0,
+            0b_0_0_0_0_0_0_1_1_1_1_0_0_0_0_0_0,
+            0b_0_0_0_0_0_0_1_1_1_1_0_0_0_0_0_0,
+            0b_0_0_0_0_0_0_1_1_1_1_0_0_0_0_0_0,
+            0b_0_0_0_0_0_0_1_1_1_1_0_0_0_0_0_0,
+            0b_0_0_0_0_0_0_1_1_1_1_0_0_0_0_0_0,
+            0b_0_0_0_0_0_0_1_1_1_1_0_0_0_0_0_0,
+            0b_0_0_0_0_0_0_1_1_1_1_0_0_0_0_0_0,
+        ];
+
+        matrix.transpose();
+
+        assert_eq!(
+            matrix,
+            [
+                0b_0_0_0_0_0_0_0_0_0_0_0_0_1_1_1_1,
+                0b_0_0_0_0_0_0_0_0_0_0_0_0_1_1_1_1,
+                0b_0_0_0_0_0_0_0_0_0_0_0_0_1_1_1_1,
+                0b_0_0_0_0_0_0_0_0_0_0_0_0_1_1_1_1,
+                0b_0_0_0_0_0_0_0_0_0_0_0_0_0_0_0_0,
+                0b_0_0_0_0_0_0_0_0_0_0_0_0_0_0_0_0,
+                0b_1_1_1_1_1_1_1_1_1_1_1_1_1_1_1_1,
+                0b_1_1_1_1_1_1_1_1_1_1_1_1_1_1_1_1,
+                0b_1_1_1_1_1_1_1_1_1_1_1_1_1_1_1_1,
+                0b_1_1_1_1_1_1_1_1_1_1_1_1_1_1_1_1,
+                0b_0_0_0_0_0_0_0_0_0_0_0_0_1_1_1_1,
+                0b_0_0_0_0_0_0_0_0_0_0_0_0_1_1_1_1,
+                0b_0_0_0_0_0_0_0_0_0_0_0_0_1_1_1_1,
+                0b_0_0_0_0_0_0_0_0_0_0_0_0_1_1_1_1,
+                0b_0_0_0_0_0_0_0_0_0_0_0_0_1_1_1_1,
+                0b_0_0_0_0_0_0_0_0_0_0_0_0_1_1_1_1,
             ]
         );
 
