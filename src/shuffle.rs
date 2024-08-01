@@ -634,6 +634,76 @@ impl BitShuffle for u128 {
     }
 }
 
+impl BitShuffle for i8 {
+    fn compress(self, mask: Self) -> Self {
+        (self as u8).compress(mask as u8) as Self
+    }
+
+    fn compress_left(self, mask: Self) -> Self {
+        (self as u8).compress_left(mask as u8) as Self
+    }
+
+    fn expand(self, mask: Self) -> Self {
+        (self as u8).expand(mask as u8) as Self
+    }
+}
+
+impl BitShuffle for i16 {
+    fn compress(self, mask: Self) -> Self {
+        (self as u16).compress(mask as u16) as Self
+    }
+
+    fn compress_left(self, mask: Self) -> Self {
+        (self as u16).compress_left(mask as u16) as Self
+    }
+
+    fn expand(self, mask: Self) -> Self {
+        (self as u16).expand(mask as u16) as Self
+    }
+}
+
+impl BitShuffle for i32 {
+    fn compress(self, mask: Self) -> Self {
+        (self as u32).compress(mask as u32) as Self
+    }
+
+    fn compress_left(self, mask: Self) -> Self {
+        (self as u32).compress_left(mask as u32) as Self
+    }
+
+    fn expand(self, mask: Self) -> Self {
+        (self as u32).expand(mask as u32) as Self
+    }
+}
+
+impl BitShuffle for i64 {
+    fn compress(self, mask: Self) -> Self {
+        (self as u64).compress(mask as u64) as Self
+    }
+
+    fn compress_left(self, mask: Self) -> Self {
+        (self as u64).compress_left(mask as u64) as Self
+    }
+
+    fn expand(self, mask: Self) -> Self {
+        (self as u64).expand(mask as u64) as Self
+    }
+}
+
+impl BitShuffle for i128 {
+    fn compress(self, mask: Self) -> Self {
+        (self as u128).compress(mask as u128) as Self
+    }
+
+    fn compress_left(self, mask: Self) -> Self {
+        (self as u128).compress_left(mask as u128) as Self
+    }
+
+    fn expand(self, mask: Self) -> Self {
+        (self as u128).expand(mask as u128) as Self
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::BitShuffle;
