@@ -1,13 +1,13 @@
-use std::ops::BitOr;
+use std::ops::{BitAnd, BitOr, BitXor, BitXorAssign};
 
-pub trait BitShuffle {
+pub trait BitOps {
     /// Moves the bits of the value to the right according to `mask`.
     ///
     /// ```text
-    ///   x <- abcd_efgh_ijkl_mnop
-    ///   m <- 1100_1100_0011_0011
+    ///   x <- abcd_efgh
+    ///   m <- 1100_1100
     ///   c <- x.compress(m)
-    ///   c == 0000_0000_abef_klop
+    ///   c == 0000_abef
     /// ```
     ///
     /// This operation is also known as "gather". The inverse is [`BitShuffle::expand`].
@@ -16,12 +16,34 @@ pub trait BitShuffle {
     /// Moves the bits of the value to the left according to `mask`.
     ///
     /// ```text
-    ///   x <- abcd_efgh_ijkl_mnop
-    ///   m <- 1100_1100_0011_0011
+    ///   x <- abcd_efgh
+    ///   m <- 1100_1100
     ///   c <- x.compress(m)
-    ///   c == abef_klop_0000_0000
+    ///   c == abef_0000
     /// ```
     fn compress_left(self, mask: Self) -> Self;
+
+    /// Exchanges the masked bits of `self` exchanged with the corresponding bits in `other`.
+    /// Returns a tuple where the first element is the new value of `self` and the second
+    /// element is the new value of `other`.
+    ///
+    /// ```text
+    ///  a <- abcd_efgh
+    ///  b <- ijkl_mnop
+    ///  m <- 1100_1100
+    ///  (a, b) <- a.exchange(b, m)
+    ///  a == ijcd_mngh
+    ///  b == abkl_efop
+    /// ```
+    fn exchange(mut self, mut other: Self, mask: Self) -> (Self, Self)
+    where
+        Self: BitAnd<Output = Self> + BitXor<Output = Self> + BitXorAssign + Copy,
+    {
+        self ^= other;
+        other ^= self & mask;
+        self ^= other;
+        (self, other)
+    }
 
     /// Moves the bits of the value to the right according to `mask`.
     /// ```text
@@ -52,7 +74,7 @@ pub trait BitShuffle {
     }
 }
 
-impl BitShuffle for u8 {
+impl BitOps for u8 {
     fn compress(mut self, mask: Self) -> Self {
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
         {
@@ -142,7 +164,7 @@ impl BitShuffle for u8 {
     }
 }
 
-impl BitShuffle for u16 {
+impl BitOps for u16 {
     fn compress(mut self, mask: Self) -> Self {
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
         {
@@ -234,7 +256,7 @@ impl BitShuffle for u16 {
     }
 }
 
-impl BitShuffle for u32 {
+impl BitOps for u32 {
     fn compress(mut self, mask: Self) -> Self {
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
         {
@@ -327,7 +349,7 @@ impl BitShuffle for u32 {
     }
 }
 
-impl BitShuffle for u64 {
+impl BitOps for u64 {
     fn compress(mut self, mask: Self) -> Self {
         #[cfg(target_arch = "x86_64")]
         {
@@ -418,7 +440,7 @@ impl BitShuffle for u64 {
     }
 }
 
-impl BitShuffle for u128 {
+impl BitOps for u128 {
     fn compress(mut self, mask: Self) -> Self {
         #[cfg(target_arch = "x86_64")]
         {
@@ -634,7 +656,7 @@ impl BitShuffle for u128 {
     }
 }
 
-impl BitShuffle for i8 {
+impl BitOps for i8 {
     fn compress(self, mask: Self) -> Self {
         (self as u8).compress(mask as u8) as Self
     }
@@ -648,7 +670,7 @@ impl BitShuffle for i8 {
     }
 }
 
-impl BitShuffle for i16 {
+impl BitOps for i16 {
     fn compress(self, mask: Self) -> Self {
         (self as u16).compress(mask as u16) as Self
     }
@@ -662,7 +684,7 @@ impl BitShuffle for i16 {
     }
 }
 
-impl BitShuffle for i32 {
+impl BitOps for i32 {
     fn compress(self, mask: Self) -> Self {
         (self as u32).compress(mask as u32) as Self
     }
@@ -676,7 +698,7 @@ impl BitShuffle for i32 {
     }
 }
 
-impl BitShuffle for i64 {
+impl BitOps for i64 {
     fn compress(self, mask: Self) -> Self {
         (self as u64).compress(mask as u64) as Self
     }
@@ -690,7 +712,7 @@ impl BitShuffle for i64 {
     }
 }
 
-impl BitShuffle for i128 {
+impl BitOps for i128 {
     fn compress(self, mask: Self) -> Self {
         (self as u128).compress(mask as u128) as Self
     }
@@ -706,7 +728,7 @@ impl BitShuffle for i128 {
 
 #[cfg(test)]
 mod tests {
-    use super::BitShuffle;
+    use super::BitOps;
 
     #[test]
     fn test_features() {
