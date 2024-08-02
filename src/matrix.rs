@@ -204,14 +204,14 @@ pub trait BitMatrix {
     /// use bitmatrix::BitMatrix;
     ///
     /// let mut matrix = [
-    ///      0b_0101_0000,
-    ///      0b_0101_0000,
-    ///      0b_0101_0000,
-    ///      0b_0101_0000,
-    ///      0b_1111_1010,
-    ///      0b_1111_1010,
-    ///      0b_1111_1010,
-    ///      0b_1111_1010,
+    ///     0b_0101_0000,
+    ///     0b_0101_0000,
+    ///     0b_0101_0000,
+    ///     0b_0101_0000,
+    ///     0b_1111_1010,
+    ///     0b_1111_1010,
+    ///     0b_1111_1010,
+    ///     0b_1111_1010,
     /// ];
     ///
     /// matrix.transpose();
@@ -327,18 +327,18 @@ impl BitMatrix for [u8; 8] {
     fn transpose(&mut self) {
         let x = u64::from_ne_bytes(*self);
 
-        // x: 01234567 89abcdef ghijklmn opqrstuv wxyzABCD EFGHIJKL MNOPQRST UVWXYZ$.
-        // t: 08g0wEMU 19hpxFNV 2aiqyGOW 3bjrzHPX 4cksAIQY 5dltBJRZ 6emuCKS$ 7fnvDLT.
+        // A         M0       T0       M1       T1             T
         //
-        // m0: 00000001 00000001 00000001 00000001 00000001 00000001 00000001 00000001
-        // t0: compress(x, m0)
-        //     00000000 00000000 00000000 00000000 00000000 00000000 00000000 7fnvDLT.
+        // .$ZYXWVU  00000001 00000000 00000010 00000000       .TLDvnf7
+        // TSRQPONM  00000001 00000000 00000010 00000000       $SKCume6
+        // LKJIHGFE  00000001 00000000 00000010 00000000       ZRJBtld5
+        // DCBAzyxw  00000001 00000000 00000010 00000000  ...  YQIAskc4
+        // vutsrqpo  00000001 00000000 00000010 00000000       XPHzrjb3
+        // nmlkjihg  00000001 00000000 00000010 00000000       WOGyqia2
+        // fedcba98  00000001 00000000 00000010 VNFxph91       VNFxph91
+        // 76543210  00000001 UMEwog80 00000010 UMEwog80       UMEwog80
         //
-        // m1: 00000010 00000010 00000010 00000010 00000010 00000010 00000010 00000010
-        // t1: compress(x, m1) << 8
-        //     00000000 00000000 00000000 00000000 00000000 00000000 6emuCKS$ 00000000.
-        //
-        // etc.
+        // T0 = A.compress(M0), T1 = T0 | (A.compress(M1) << 8) ...
 
         let t = x.compress(0x101010101010101)
             | (x.compress(0x202020202020202) << 8)
@@ -375,7 +375,23 @@ impl BitMatrix for [u16; 16] {
         ((self[row] >> col) & 1) as u8
     }
 
-    fn matmul(self, rhs: &Self) -> Self {
+    fn matmul(mut self, rhs: &Self) -> Self {
+        use crate::shuffle::ByteShuffle;
+
+        let this: [u8; 32] = unsafe { core::mem::transmute(self) };
+        let rhs: [u8; 32] = unsafe { core::mem::transmute(*rhs) };
+        let m_self: [u8; 32] = [
+            0, 8, 1, 9, 2, 10, 3, 11, 4, 12, 5, 13, 6, 14, 7, 15, 16, 24, 17, 25, 18, 26, 19, 27,
+            20, 28, 21, 29, 22, 30, 23, 31,
+        ];
+        let m_rhs: [u8; 32] = [
+            0, 8, 1, 9, 2, 10, 3, 11, 16, 24, 17, 25, 18, 26, 19, 27, 4, 12, 5, 13, 6, 14, 7, 15,
+            20, 28, 21, 29, 22, 30, 23, 31,
+        ];
+
+        // let mut blocks: [[u8; 8]; 4] = unsafe { core::mem::transmute(this.shuffle_bytes(m_self))
+        // };
+
         todo!()
     }
 
@@ -422,25 +438,32 @@ impl BitMatrix for [u16; 16] {
     }
 
     fn transpose(&mut self) {
+        // use crate::shuffle::ByteShuffle;
 
+        // let this: &mut [u8; 32] = unsafe { core::mem::transmute(self) };
+        // let mask: [u8; 32] = [
+        //     0, 8, 1, 9, 2, 10, 3, 11, 4, 12, 5, 13, 6, 14, 7, 15, 16, 24, 17, 25, 18, 26, 19, 27,
+        //     20, 28, 21, 29, 22, 30, 23, 31,
+        // ];
 
+        // this.shuffle_bytes(mask);
+        // let blocks: &mut [[u8; 8]; 4] = unsafe { core::mem::transmute(this) };
 
-        #[rustfmt::skip]
-        let [
-            a00, a01, a02, a03, 
-            a04, a05, a06, a07, 
-            a08, a09, a10, a11, 
-            a12, a13, a14, a15
-        ] = self;
-        
+        // for block in blocks.iter_mut() {
+        //     block.transpose();
+        // }
+
+        let [a00, a01, a02, a03, a04, a05, a06, a07, a08, a09, a10, a11, a12, a13, a14, a15] =
+        self;
+
         let mut mask = u16::MAX;
-    
+
         macro_rules! rot_exchange {
             ($a:expr, $b:expr, $rot:expr) => {
                 *$b = $b.rotate_left($rot);
                 (*$a, *$b) = $a.exchange(*$b, mask);
             };
-        } 
+        }
 
         mask ^= mask >> 8;
         rot_exchange!(a00, a08, 8);
@@ -500,6 +523,7 @@ impl BitMatrix for [u16; 16] {
     }
 }
 
+#[rustfmt::skip]
 #[cfg(test)]
 mod tests {
     use core::array;
