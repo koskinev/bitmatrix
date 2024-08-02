@@ -1,3 +1,4 @@
+use core::mem;
 use std::ops::{BitAnd, BitOr, BitXor, BitXorAssign};
 
 pub trait BitOps {
@@ -726,6 +727,82 @@ impl BitOps for i128 {
     }
 }
 
+pub trait ByteShuffle {
+    fn shuffle_bytes(&mut self, mask: Self);
+}
+
+impl ByteShuffle for [u8; 16] {
+    fn shuffle_bytes(&mut self, mask: Self) {
+        #[cfg(target_arch = "x86_64")]
+        {
+            if is_x86_feature_detected!("sse2") && is_x86_feature_detected!("ssse3") {
+                unsafe {
+                    use core::arch::x86_64::{
+                        __m128i, _mm_loadu_si128, _mm_shuffle_epi8, _mm_storeu_si128,
+                    };
+
+                    // assert_eq!(mem::align_of::<__m128i>(), mem::align_of::<Self>());
+
+                    let s: *const __m128i = self.as_ptr().cast();
+                    let m: *const __m128i = mask.as_ptr().cast();
+
+                    let x = _mm_loadu_si128(s);
+                    let m = _mm_loadu_si128(m);
+                    let s = _mm_shuffle_epi8(x, m);
+                    _mm_storeu_si128(self.as_mut_ptr().cast(), s);
+                }
+            }
+        }
+
+        let res: mem::MaybeUninit<[u8; 16]> = mem::MaybeUninit::uninit();
+        let ptr: *mut u8 = res.as_ptr() as *mut u8;
+        for i in 0..16 {
+            // if the most significant bit of b is set,
+            // then the destination byte is set to 0.
+            if self[i] & 0x80 == 0u8 {
+                unsafe { ptr.add(i).write(self[(mask[i] % 16) as usize]) };
+            }
+        }
+        *self = unsafe { res.assume_init_read() };
+    }
+}
+
+impl ByteShuffle for [u8; 32] {
+    fn shuffle_bytes(&mut self, mask: Self) {
+        // #[cfg(target_arch = "x86_64")]
+        // {
+        //     if is_x86_feature_detected!("sse2") && is_x86_feature_detected!("avx2") {
+        //         unsafe {
+        //             use core::arch::x86_64::{
+        //                 __m256i, _mm256_loadu_si256, _mm256_shuffle_epi8, _mm256_storeu_si256,
+        //             };
+
+        //             // assert_eq!(mem::align_of::<__m256i>(), mem::align_of::<Self>());
+
+        //             let s: *const __m256i = self.as_ptr().cast();
+        //             let m: *const __m256i = mask.as_ptr().cast();
+
+        //             let x = _mm256_loadu_si256(s);
+        //             let m = _mm256_loadu_si256(m);
+        //             let s = _mm256_shuffle_epi8(x, m);
+        //             _mm256_storeu_si256(self.as_mut_ptr().cast(), s);
+        //         }
+        //     }
+        // }
+
+        let res: mem::MaybeUninit<[u8; 32]> = mem::MaybeUninit::uninit();
+        let ptr: *mut u8 = res.as_ptr() as *mut u8;
+        for i in 0..16 {
+            // if the most significant bit of b is set,
+            // then the destination byte is set to 0.
+            if self[i] & 0x80 == 0u8 {
+                unsafe { ptr.add(i).write(self[(mask[i] % 16) as usize]) };
+            }
+        }
+        *self = unsafe { res.assume_init_read() };
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::BitOps;
@@ -744,12 +821,31 @@ mod tests {
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
         {
             if is_x86_feature_detected!("bmi2") {
-                print!("bmi2");
-            } else {
-                print!("no bmi2");
+                print!("bmi2 ");
             }
+            if is_x86_feature_detected!("sse") {
+                print!("sse ");
+            }
+            if is_x86_feature_detected!("sse2") {
+                print!("sse2 ");
+            }
+            if is_x86_feature_detected!("ssse3") {
+                print!("ssse3 ");
+            }
+            if is_x86_feature_detected!("avx") {
+                print!("avx ");
+            }
+            if is_x86_feature_detected!("avx2") {
+                print!("avx2 ");
+            }
+            if is_x86_feature_detected!("popcnt") {
+                print!("popcnt ");
+            }
+            if is_x86_feature_detected!("lzcnt") {
+                print!("lzcnt ");
+            }
+            println!()
         }
-        println!()
     }
 
     #[test]
