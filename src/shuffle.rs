@@ -11,7 +11,7 @@ pub trait BitOps {
     ///   c == 0000_abef
     /// ```
     ///
-    /// This operation is also known as "gather". The inverse is [`BitShuffle::expand`].
+    /// This operation is also known as "gather". The inverse is [`BitOps::expand`].
     fn compress(self, mask: Self) -> Self;
 
     /// Moves the bits of the value to the left according to `mask`.
@@ -54,7 +54,7 @@ pub trait BitOps {
     ///   e == ab00_cd00_ef00_gh00
     /// ```
     ///
-    /// The inverse of this operation is [`BitShuffle::compress`].
+    /// The inverse of this operation is [`BitOps::compress`].
     fn expand(self, mask: Self) -> Self;
 
     /// Moves all bits marked with `1`s in the mask to the right and all bits marked with `0`s to
@@ -724,82 +724,6 @@ impl BitOps for i128 {
 
     fn expand(self, mask: Self) -> Self {
         (self as u128).expand(mask as u128) as Self
-    }
-}
-
-pub trait ByteShuffle {
-    fn shuffle_bytes(&mut self, mask: Self);
-}
-
-impl ByteShuffle for [u8; 16] {
-    fn shuffle_bytes(&mut self, mask: Self) {
-        #[cfg(target_arch = "x86_64")]
-        {
-            if is_x86_feature_detected!("sse2") && is_x86_feature_detected!("ssse3") {
-                unsafe {
-                    use core::arch::x86_64::{
-                        __m128i, _mm_loadu_si128, _mm_shuffle_epi8, _mm_storeu_si128,
-                    };
-
-                    // assert_eq!(mem::align_of::<__m128i>(), mem::align_of::<Self>());
-
-                    let s: *const __m128i = self.as_ptr().cast();
-                    let m: *const __m128i = mask.as_ptr().cast();
-
-                    let x = _mm_loadu_si128(s);
-                    let m = _mm_loadu_si128(m);
-                    let s = _mm_shuffle_epi8(x, m);
-                    _mm_storeu_si128(self.as_mut_ptr().cast(), s);
-                }
-            }
-        }
-
-        let res: mem::MaybeUninit<[u8; 16]> = mem::MaybeUninit::uninit();
-        let ptr: *mut u8 = res.as_ptr() as *mut u8;
-        for i in 0..16 {
-            // if the most significant bit of b is set,
-            // then the destination byte is set to 0.
-            if self[i] & 0x80 == 0u8 {
-                unsafe { ptr.add(i).write(self[(mask[i] % 16) as usize]) };
-            }
-        }
-        *self = unsafe { res.assume_init_read() };
-    }
-}
-
-impl ByteShuffle for [u8; 32] {
-    fn shuffle_bytes(&mut self, mask: Self) {
-        // #[cfg(target_arch = "x86_64")]
-        // {
-        //     if is_x86_feature_detected!("sse2") && is_x86_feature_detected!("avx2") {
-        //         unsafe {
-        //             use core::arch::x86_64::{
-        //                 __m256i, _mm256_loadu_si256, _mm256_shuffle_epi8, _mm256_storeu_si256,
-        //             };
-
-        //             // assert_eq!(mem::align_of::<__m256i>(), mem::align_of::<Self>());
-
-        //             let s: *const __m256i = self.as_ptr().cast();
-        //             let m: *const __m256i = mask.as_ptr().cast();
-
-        //             let x = _mm256_loadu_si256(s);
-        //             let m = _mm256_loadu_si256(m);
-        //             let s = _mm256_shuffle_epi8(x, m);
-        //             _mm256_storeu_si256(self.as_mut_ptr().cast(), s);
-        //         }
-        //     }
-        // }
-
-        let res: mem::MaybeUninit<[u8; 32]> = mem::MaybeUninit::uninit();
-        let ptr: *mut u8 = res.as_ptr() as *mut u8;
-        for i in 0..16 {
-            // if the most significant bit of b is set,
-            // then the destination byte is set to 0.
-            if self[i] & 0x80 == 0u8 {
-                unsafe { ptr.add(i).write(self[(mask[i] % 16) as usize]) };
-            }
-        }
-        *self = unsafe { res.assume_init_read() };
     }
 }
 
