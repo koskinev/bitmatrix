@@ -376,22 +376,6 @@ impl BitMatrix for [u16; 16] {
     }
 
     fn matmul(mut self, rhs: &Self) -> Self {
-        use crate::shuffle::ByteShuffle;
-
-        let this: [u8; 32] = unsafe { core::mem::transmute(self) };
-        let rhs: [u8; 32] = unsafe { core::mem::transmute(*rhs) };
-        let m_self: [u8; 32] = [
-            0, 8, 1, 9, 2, 10, 3, 11, 4, 12, 5, 13, 6, 14, 7, 15, 16, 24, 17, 25, 18, 26, 19, 27,
-            20, 28, 21, 29, 22, 30, 23, 31,
-        ];
-        let m_rhs: [u8; 32] = [
-            0, 8, 1, 9, 2, 10, 3, 11, 16, 24, 17, 25, 18, 26, 19, 27, 4, 12, 5, 13, 6, 14, 7, 15,
-            20, 28, 21, 29, 22, 30, 23, 31,
-        ];
-
-        // let mut blocks: [[u8; 8]; 4] = unsafe { core::mem::transmute(this.shuffle_bytes(m_self))
-        // };
-
         todo!()
     }
 
@@ -438,23 +422,99 @@ impl BitMatrix for [u16; 16] {
     }
 
     fn transpose(&mut self) {
-        // use crate::shuffle::ByteShuffle;
+        #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+        {
+            if is_x86_feature_detected!("sse2") && is_x86_feature_detected!("avx2") {
+                // We treat the 16x16 matrix as four 8x8 blocks and transpose each block in-place.
+                //
+                //  A B => A'B' => A'B'
+                //  C D    C'D'    C'D'
+                //
+                // The steps are:
+                // - convert the matrix to a row blocked format
+                // - transpose each block in-place with a 8x8 transpose
+                // - swap the 2nd and 3rd blocks
+                // - convert the matrix back to a column blocked format
+                //
+                // The conversion to and from the row blocked format can be visualized by viewing
+                // the matrix as an 16x2 array of bytes, where each byte is a row in an 8x8 matrix.
+                // We shuffle the rows as follows:
+                // ```text
+                // 
+                //  Index       Initial        Row blocked:    Mapping:  Reverse:
+                //
+                //  [ 0,  1,    [ a0, b0,  =>  [ a0, a1,       [  0, 2,   [  0,  8,
+                //    2,  3,      a1, b1,        a2, a3,          4, 6,      1,  9,
+                //    4,  5,      a2, b2,        a4, a5,          8, 10,     2, 10,
+                //    6,  7,      a3, b3,        a6, a7,         12, 14,     3, 11,
+                //    8,  9,      a4, b4,        b0, b1,          1,  3,     4, 12,
+                //   10, 11,      a5, b5,        b2, b3,          5,  7,     5, 13,
+                //   12, 13,      a6  b6,        b4, b5,          9, 11,     6, 14,
+                //   14, 15,      a7, b7,        b6, b7,         13, 15,     7, 15,
+                //   16, 17,      c0, d0,        c0, c1,         16, 18,    16, 24,
+                //   18, 19,      c1, d1,        c2, c3,         20, 22,    17, 25,
+                //   20, 21,      c2, d2,        c4, c5,         24, 26,    18, 26,
+                //   22, 23,      c3, d3,        c6, c7,         28, 30,    19, 27,
+                //   24, 25,      c4, d4,        d0, d1,         17, 19,    20, 28,
+                //   26, 27,      c5, d5,        d2, d3,         21, 23,    21, 29,
+                //   28, 29,      c6, d6,        d4, d5,         25, 27,    22, 30,
+                //   30, 31, ]    c7, d7, ]      d6, d7, ]       29, 31,    23, 31, ]
+                // ```
+                //
+                // The reverse operation can be reversed by repeating the shuffle with the same
+                // mapping.
 
-        // let this: &mut [u8; 32] = unsafe { core::mem::transmute(self) };
-        // let mask: [u8; 32] = [
-        //     0, 8, 1, 9, 2, 10, 3, 11, 4, 12, 5, 13, 6, 14, 7, 15, 16, 24, 17, 25, 18, 26, 19, 27,
-        //     20, 28, 21, 29, 22, 30, 23, 31,
-        // ];
+                #[cfg(target_arch = "x86")]
+                use core::arch::x86::{
+                    _mm256_loadu_si256, _mm256_shuffle_epi8, _mm256_storeu_si256,
+                };
 
-        // this.shuffle_bytes(mask);
-        // let blocks: &mut [[u8; 8]; 4] = unsafe { core::mem::transmute(this) };
+                #[cfg(target_arch = "x86_64")]
+                use core::arch::x86_64::{
+                    _mm256_loadu_si256, _mm256_shuffle_epi8, _mm256_storeu_si256,
+                };
 
-        // for block in blocks.iter_mut() {
-        //     block.transpose();
-        // }
+                // _mm256_shuffle_epi8 requires a 32 byte mapping vector, where each byte is an
+                // index in two 128-bit lanes. The mapping is applied to each
+                // 128-bit lane separately.
+                const MAPPING: [u8; 32] = [
+                    0, 2, 4, 6, 8, 10, 12, 14, 1, 3, 5, 7, 9, 11, 13, 15, // 1st half
+                    0, 2, 4, 6, 8, 10, 12, 14, 1, 3, 5, 7, 9, 11, 13, 15, // 2nd half
+                ];
 
-        let [a00, a01, a02, a03, a04, a05, a06, a07, a08, a09, a10, a11, a12, a13, a14, a15] =
-        self;
+                const REVERSE: [u8; 32] = [
+                    0, 8, 1, 9, 2, 10, 3, 11, 4, 12, 5, 13, 6, 14, 7, 15, // ...
+                    0, 8, 1, 9, 2, 10, 3, 11, 4, 12, 5, 13, 6, 14, 7, 15,
+                ];
+
+                unsafe {
+                    let this = _mm256_loadu_si256(self.as_ptr().cast());
+                    let map = _mm256_loadu_si256(MAPPING.as_ptr().cast());
+                    _mm256_storeu_si256(self.as_mut_ptr().cast(), _mm256_shuffle_epi8(this, map));
+
+                    // Each 8x8 block is transposed in-place.
+                    let blocks = &mut *(self.as_mut_ptr() as *mut [[u8; 8]; 4]);
+
+                    for block in blocks.iter_mut() {
+                        block.transpose();
+                    }
+
+                    // The 2nd and 3rd blocks are swapped.
+                    blocks.swap(1, 2);
+
+                    // Finally, the matrix is converted back to it's original format.
+
+                    let this = _mm256_loadu_si256(self.as_ptr().cast());
+                    let rev = _mm256_loadu_si256(REVERSE.as_ptr().cast());
+                    _mm256_storeu_si256(self.as_mut_ptr().cast(), _mm256_shuffle_epi8(this, rev));
+                }
+                return;
+            }
+        }
+
+        // The fallback implementation is adapted from the algorithm described in Hacker's Delight
+        // 2nd ed. by Henry S. Warren, Jr. (2013), section 7-3 "Transposing a Bit Matrix".
+        let [a00, a01, a02, a03, a04, a05, a06, a07, a08, a09, a10, a11, a12, a13, a14, a15] = self;
 
         let mut mask = u16::MAX;
 
