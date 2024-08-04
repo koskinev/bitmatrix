@@ -70,7 +70,7 @@ pub trait BitMatrix {
     /// ];
     /// assert_eq!(matrix.matmul(&BitMatrix::IDENTITY), matrix);
     /// ```
-    fn matmul(self, rhs: &Self) -> Self;
+    fn matmul(&self, rhs: &Self) -> Self;
 
     /// Reverses the order of the rows.
     /// ```
@@ -262,22 +262,22 @@ impl BitMatrix for [u8; 8] {
         (self[row] >> col) & 1
     }
 
-    fn matmul(self, rhs: &Self) -> Self {
+    fn matmul(&self, rhs: &Self) -> Self {
         const ROW: u64 = 0x00000000000000FF;
         const COL: u64 = 0x0101010101010101;
 
-        let this = u64::from_ne_bytes(self);
+        let this = u64::from_ne_bytes(*self);
         let rhs = u64::from_ne_bytes(*rhs);
         let mut result = 0;
 
-        result |= (COL & this) * (ROW & rhs);
-        result |= (COL & (this >> 1)) * (ROW & (rhs >> 8));
-        result |= (COL & (this >> 2)) * (ROW & (rhs >> 16));
-        result |= (COL & (this >> 3)) * (ROW & (rhs >> 24));
-        result |= (COL & (this >> 4)) * (ROW & (rhs >> 32));
-        result |= (COL & (this >> 5)) * (ROW & (rhs >> 40));
-        result |= (COL & (this >> 6)) * (ROW & (rhs >> 48));
-        result |= (COL & (this >> 7)) * (ROW & (rhs >> 56));
+        result ^= (COL & this) * (ROW & rhs);
+        result ^= (COL & (this >> 1)) * (ROW & (rhs >> 8));
+        result ^= (COL & (this >> 2)) * (ROW & (rhs >> 16));
+        result ^= (COL & (this >> 3)) * (ROW & (rhs >> 24));
+        result ^= (COL & (this >> 4)) * (ROW & (rhs >> 32));
+        result ^= (COL & (this >> 5)) * (ROW & (rhs >> 40));
+        result ^= (COL & (this >> 6)) * (ROW & (rhs >> 48));
+        result ^= (COL & (this >> 7)) * (ROW & (rhs >> 56));
 
         result.to_ne_bytes()
     }
@@ -375,8 +375,45 @@ impl BitMatrix for [u16; 16] {
         ((self[row] >> col) & 1) as u8
     }
 
-    fn matmul(mut self, rhs: &Self) -> Self {
-        todo!()
+    fn matmul(&self, rhs: &Self) -> Self {
+        const BLOCK: [u8; 32] = [
+            0, 2, 4, 6, 8, 10, 12, 14, 1, 3, 5, 7, 9, 11, 13, 15, // 1st half
+            0, 2, 4, 6, 8, 10, 12, 14, 1, 3, 5, 7, 9, 11, 13, 15, // 2nd half
+        ];
+
+        const UNBLOCK: [u8; 32] = [
+            0, 8, 1, 9, 2, 10, 3, 11, 4, 12, 5, 13, 6, 14, 7, 15, // ...
+            0, 8, 1, 9, 2, 10, 3, 11, 4, 12, 5, 13, 6, 14, 7, 15,
+        ];
+
+        let mut lhs = *self;
+        let mut rhs = *rhs;
+        let mut result = Self::ZERO;
+
+        shuffle_bytes(unsafe { &mut *lhs.as_mut_ptr().cast() }, &BLOCK);
+        shuffle_bytes(unsafe { &mut *rhs.as_mut_ptr().cast() }, &BLOCK);
+
+        let lhs_blocks: &mut [[[u8; 8]; 2]; 2] = unsafe { &mut *lhs.as_mut_ptr().cast() };
+        let rhs_blocks: &mut [[[u8; 8]; 2]; 2] = unsafe { &mut *rhs.as_mut_ptr().cast() };
+
+        let b00x00 = u64::from_ne_bytes(lhs_blocks[0][0].matmul(&rhs_blocks[0][0]));
+        let b00x01 = u64::from_ne_bytes(lhs_blocks[0][0].matmul(&rhs_blocks[0][1]));
+        let b01x10 = u64::from_ne_bytes(lhs_blocks[0][1].matmul(&rhs_blocks[1][0]));
+        let b01x11 = u64::from_ne_bytes(lhs_blocks[0][1].matmul(&rhs_blocks[1][1]));
+        let b10x00 = u64::from_ne_bytes(lhs_blocks[1][0].matmul(&rhs_blocks[0][0]));
+        let b10x01 = u64::from_ne_bytes(lhs_blocks[1][0].matmul(&rhs_blocks[0][1]));
+        let b11x10 = u64::from_ne_bytes(lhs_blocks[1][1].matmul(&rhs_blocks[1][0]));
+        let b11x11 = u64::from_ne_bytes(lhs_blocks[1][1].matmul(&rhs_blocks[1][1]));
+
+        let res_blocks: &mut [[[u8; 8]; 2]; 2] = unsafe { &mut *result.as_mut_ptr().cast() };
+        res_blocks[0][0] = (b00x00 ^ b01x10).to_ne_bytes();
+        res_blocks[0][1] = (b00x01 ^ b01x11).to_ne_bytes();
+        res_blocks[1][0] = (b10x00 ^ b11x10).to_ne_bytes();
+        res_blocks[1][1] = (b10x01 ^ b11x11).to_ne_bytes();
+
+        shuffle_bytes(unsafe { &mut *result.as_mut_ptr().cast() }, &UNBLOCK);
+        result
+        
     }
 
     fn reverse_rows(&mut self) {
@@ -464,50 +501,34 @@ impl BitMatrix for [u16; 16] {
                 // The reverse operation can be reversed by repeating the shuffle with the same
                 // mapping.
 
-                #[cfg(target_arch = "x86")]
-                use core::arch::x86::{
-                    _mm256_loadu_si256, _mm256_shuffle_epi8, _mm256_storeu_si256,
-                };
-
-                #[cfg(target_arch = "x86_64")]
-                use core::arch::x86_64::{
-                    _mm256_loadu_si256, _mm256_shuffle_epi8, _mm256_storeu_si256,
-                };
-
-                // _mm256_shuffle_epi8 requires a 32 byte mapping vector, where each byte is an
-                // index in two 128-bit lanes. The mapping is applied to each
-                // 128-bit lane separately.
-                const MAPPING: [u8; 32] = [
+                // shuffle_bytes requires a 32 byte mapping vector, where each byte is an
+                // index into two 128-bit lanes. The mapping is applied to each 128-bit lane
+                // separately.
+                const BLOCK: [u8; 32] = [
                     0, 2, 4, 6, 8, 10, 12, 14, 1, 3, 5, 7, 9, 11, 13, 15, // 1st half
                     0, 2, 4, 6, 8, 10, 12, 14, 1, 3, 5, 7, 9, 11, 13, 15, // 2nd half
                 ];
 
-                const REVERSE: [u8; 32] = [
+                const UNBLOCK: [u8; 32] = [
                     0, 8, 1, 9, 2, 10, 3, 11, 4, 12, 5, 13, 6, 14, 7, 15, // ...
                     0, 8, 1, 9, 2, 10, 3, 11, 4, 12, 5, 13, 6, 14, 7, 15,
                 ];
 
-                unsafe {
-                    let this = _mm256_loadu_si256(self.as_ptr().cast());
-                    let map = _mm256_loadu_si256(MAPPING.as_ptr().cast());
-                    _mm256_storeu_si256(self.as_mut_ptr().cast(), _mm256_shuffle_epi8(this, map));
+                let this: &mut [u8; 32] = unsafe { &mut *self.as_mut_ptr().cast() };
+                shuffle_bytes(this, &BLOCK);
 
-                    // Each 8x8 block is transposed in-place.
-                    let blocks = &mut *(self.as_mut_ptr() as *mut [[u8; 8]; 4]);
-
-                    for block in blocks.iter_mut() {
-                        block.transpose();
-                    }
-
-                    // The 2nd and 3rd blocks are swapped.
-                    blocks.swap(1, 2);
-
-                    // Finally, the matrix is converted back to it's original format.
-
-                    let this = _mm256_loadu_si256(self.as_ptr().cast());
-                    let rev = _mm256_loadu_si256(REVERSE.as_ptr().cast());
-                    _mm256_storeu_si256(self.as_mut_ptr().cast(), _mm256_shuffle_epi8(this, rev));
+                // Each 8x8 block is transposed in-place.
+                let blocks: &mut [[u8; 8]; 4] = unsafe { &mut *self.as_mut_ptr().cast() };
+                for block in blocks.iter_mut() {
+                    block.transpose();
                 }
+
+                // The 2nd and 3rd blocks are swapped.
+                blocks.swap(1, 2);
+
+                // Finally, the matrix is converted back to it's original format.
+                shuffle_bytes(this, &UNBLOCK);
+
                 return;
             }
         }
@@ -583,6 +604,43 @@ impl BitMatrix for [u16; 16] {
     }
 }
 
+/// A helper method for shuffling bytes in an ´[u8; 32]´ array. The mapping is applied separately to
+/// the first and second half of the array.
+fn shuffle_bytes(data: &mut [u8; 32], mapping: &[u8; 32]) {
+    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+    {
+        if is_x86_feature_detected!("sse2") && is_x86_feature_detected!("avx2") {
+            #[cfg(target_arch = "x86")]
+            use core::arch::x86::{_mm256_loadu_si256, _mm256_shuffle_epi8, _mm256_storeu_si256};
+
+            #[cfg(target_arch = "x86_64")]
+            use core::arch::x86_64::{
+                _mm256_loadu_si256, _mm256_shuffle_epi8, _mm256_storeu_si256,
+            };
+
+            unsafe {
+                let v = _mm256_loadu_si256(data.as_ptr().cast());
+                let m = _mm256_loadu_si256(mapping.as_ptr().cast());
+                _mm256_storeu_si256(data.as_mut_ptr().cast(), _mm256_shuffle_epi8(v, m));
+            }
+            return;
+        }
+    }
+
+    let mut result = [0; 32];
+    for i in 0..16 {
+        // if the most significant bit of b is set,
+        // then the destination byte is set to 0.
+        if mapping[i] & 0x80 == 0u8 {
+            result[i] = data[(mapping[i] % 16) as usize];
+        }
+        if mapping[i + 16] & 0x80 == 0u8 {
+            result[i + 16] = data[(mapping[i + 16] % 16 + 16) as usize];
+        }
+    }
+    *data = result;
+}
+
 #[rustfmt::skip]
 #[cfg(test)]
 mod tests {
@@ -592,13 +650,58 @@ mod tests {
     use crate::wyrand::WyRng;
 
     #[test]
-    fn mul_8x8() {
+    fn matmul_8x8() {
         let iters = 1000;
         let mut rng: WyRng = Default::default();
         let identity = <[u8; 8]>::IDENTITY;
         for _ in 0..iters {
-            let matrix: [u8; 8] = array::from_fn(|_| rng.u8());
-            assert_eq!(matrix.matmul(&identity), matrix);
+            let a: [u8; 8] = array::from_fn(|_| rng.u8());
+            let b: [u8; 8] = array::from_fn(|_| rng.u8());
+            assert_eq!(a.matmul(&identity), a);
+
+            let a_x_i = a.matmul(&identity);
+            let i_x_a = identity.matmul(&a);
+            
+            assert_eq!(a_x_i, a);
+            assert_eq!(i_x_a, a);
+
+            let a_x_b = a.matmul(&b);
+            let b_t = b.transposed();
+            let mut expected = [0; 8];
+            for (i, row) in a.iter().enumerate() {
+                for (j, col) in b_t.iter().enumerate() {
+                    expected[i] |= (0..8).fold(0, |acc, k| acc ^ ((row >> k) & (col >> k) & 1)) << j;
+                }
+            }
+            assert_eq!(a_x_b, expected);
+        }
+    }
+
+    #[test]
+    fn matmul_16x16() {
+        let iters = 1000;
+        let mut rng: WyRng = Default::default();
+        
+        let identity = <[u16; 16]>::IDENTITY;
+        for _ in 0..iters {
+            let a: [u16; 16] = array::from_fn(|_| rng.u16());
+            let b: [u16; 16] = array::from_fn(|_| rng.u16());
+            
+            let a_x_i = a.matmul(&identity);
+            let i_x_a = identity.matmul(&a);
+            
+            assert_eq!(a_x_i, a);
+            assert_eq!(i_x_a, a);
+
+            let a_x_b = a.matmul(&b);
+            let b_t = b.transposed();
+            let mut expected = [0; 16];
+            for (i, row) in a.iter().enumerate() {
+                for (j, col) in b_t.iter().enumerate() {
+                    expected[i] |= (0..16).fold(0, |acc, k| acc ^ ((row >> k) & (col >> k) & 1)) << j;
+                }
+            }
+            assert_eq!(a_x_b, expected);
         }
     }
 
