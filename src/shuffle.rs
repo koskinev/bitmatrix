@@ -1,4 +1,3 @@
-use core::mem;
 use std::ops::{BitAnd, BitOr, BitXor, BitXorAssign};
 
 pub trait BitOps {
