@@ -17,7 +17,7 @@
 
 #include "general.c"
 // Choose a working size by including the needed perm_b*.c here:
-#include "perm_b32.h"
+#include "perm_b64.h"
 #include "perm_bas.c"
 
 #include <iostream>
