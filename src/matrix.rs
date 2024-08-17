@@ -204,14 +204,14 @@ pub trait BitMatrix {
     /// use bitmatrix::BitMatrix;
     ///
     /// let mut matrix = [
-    ///     0b_0101_0000,
-    ///     0b_0101_0000,
-    ///     0b_0101_0000,
-    ///     0b_0101_0000,
-    ///     0b_1111_1010,
-    ///     0b_1111_1010,
-    ///     0b_1111_1010,
-    ///     0b_1111_1010,
+    ///     0b_1_1_1_1_1_1_0_0,
+    ///     0b_1_0_0_0_0_0_1_0,
+    ///     0b_1_0_0_0_0_0_1_0,
+    ///     0b_1_0_0_0_0_0_1_0,
+    ///     0b_1_1_1_1_1_1_0_0,
+    ///     0b_1_0_0_0_0_1_0_0,
+    ///     0b_1_0_0_0_0_0_1_0,
+    ///     0b_1_0_0_0_0_0_0_1,
     /// ];
     ///
     /// matrix.transpose();
@@ -219,14 +219,14 @@ pub trait BitMatrix {
     /// assert_eq!(
     ///     matrix,
     ///     [
-    ///         0b_0000_0000,
-    ///         0b_1111_0000,
-    ///         0b_0000_0000,
-    ///         0b_1111_0000,
-    ///         0b_1111_1111,
-    ///         0b_1111_0000,
-    ///         0b_1111_1111,
-    ///         0b_1111_0000,
+    ///         0b_1_0_0_0_0_0_0_0,
+    ///         0b_0_1_0_0_1_1_1_0,
+    ///         0b_0_0_1_1_0_0_0_1,
+    ///         0b_0_0_0_1_0_0_0_1,
+    ///         0b_0_0_0_1_0_0_0_1,
+    ///         0b_0_0_0_1_0_0_0_1,
+    ///         0b_0_0_0_1_0_0_0_1,
+    ///         0b_1_1_1_1_1_1_1_1,
     ///     ]
     /// );
     /// ```
@@ -325,31 +325,46 @@ impl BitMatrix for [u8; 8] {
     }
 
     fn transpose(&mut self) {
-        let x = u64::from_ne_bytes(*self);
+        // The following code was generated using the bit permutation calculator source code
+        // available at https://programming.sirrida.de/sources.zip
+        fn permute_step(x: u64, m: u64, shift: u32) -> u64 {
+            let t = ((x >> shift) ^ x) & m;
+            (x ^ t) ^ (t << shift)
+        }
 
-        // A         M0       T0       M1       T1             T
-        //
-        // .$ZYXWVU  00000001 00000000 00000010 00000000       .TLDvnf7
-        // TSRQPONM  00000001 00000000 00000010 00000000       $SKCume6
-        // LKJIHGFE  00000001 00000000 00000010 00000000       ZRJBtld5
-        // DCBAzyxw  00000001 00000000 00000010 00000000  ...  YQIAskc4
-        // vutsrqpo  00000001 00000000 00000010 00000000       XPHzrjb3
-        // nmlkjihg  00000001 00000000 00000010 00000000       WOGyqia2
-        // fedcba98  00000001 00000000 00000010 VNFxph91       VNFxph91
-        // 76543210  00000001 UMEwog80 00000010 UMEwog80       UMEwog80
-        //
-        // T0 = A.compress(M0), T1 = T0 | (A.compress(M1) << 8) ...
+        let mut x = u64::from_ne_bytes(*self);
+        x = permute_step(x, 0x00aa00aa00aa00aa, 7);
+        x = permute_step(x, 0x0000cccc0000cccc, 14);
+        x = permute_step(x, 0x00000000f0f0f0f0, 28);
+        *self = x.to_ne_bytes();
 
-        let t = x.compress(0x101010101010101)
-            | (x.compress(0x202020202020202) << 8)
-            | (x.compress(0x404040404040404) << 16)
-            | (x.compress(0x808080808080808) << 24)
-            | (x.compress(0x1010101010101010) << 32)
-            | (x.compress(0x2020202020202020) << 40)
-            | (x.compress(0x4040404040404040) << 48)
-            | (x.compress(0x8080808080808080) << 56);
+        // An alternative implementation from Hacker's Delight 2nd ed. by Henry S. Warren, Jr.
+        // (2013), section 7-3 "Transposing a Bit Matrix".
 
-        *self = t.to_ne_bytes();
+        // // A         M0       T0       M1       T1             T
+        // //
+        // // .$ZYXWVU  00000001 00000000 00000010 00000000       .TLDvnf7
+        // // TSRQPONM  00000001 00000000 00000010 00000000       $SKCume6
+        // // LKJIHGFE  00000001 00000000 00000010 00000000       ZRJBtld5
+        // // DCBAzyxw  00000001 00000000 00000010 00000000  ...  YQIAskc4
+        // // vutsrqpo  00000001 00000000 00000010 00000000       XPHzrjb3
+        // // nmlkjihg  00000001 00000000 00000010 00000000       WOGyqia2
+        // // fedcba98  00000001 00000000 00000010 VNFxph91       VNFxph91
+        // // 76543210  00000001 UMEwog80 00000010 UMEwog80       UMEwog80
+        // //
+        // // T0 = A.compress(M0), T1 = T0 | (A.compress(M1) << 8) ...
+
+        // let x = u64::from_ne_bytes(*self);
+        // let t = x.compress(0x101010101010101)
+        //     | (x.compress(0x202020202020202) << 8)
+        //     | (x.compress(0x404040404040404) << 16)
+        //     | (x.compress(0x808080808080808) << 24)
+        //     | (x.compress(0x1010101010101010) << 32)
+        //     | (x.compress(0x2020202020202020) << 40)
+        //     | (x.compress(0x4040404040404040) << 48)
+        //     | (x.compress(0x8080808080808080) << 56);
+
+        // *self = t.to_ne_bytes();
     }
 }
 
@@ -413,7 +428,6 @@ impl BitMatrix for [u16; 16] {
 
         shuffle_bytes(unsafe { &mut *result.as_mut_ptr().cast() }, &UNBLOCK);
         result
-        
     }
 
     fn reverse_rows(&mut self) {
@@ -708,14 +722,14 @@ mod tests {
     #[test]
     fn transpose_8x8() {
         let mut matrix = [
-             0b_0101_0000,
-             0b_0101_0000,
-             0b_0101_0000,
-             0b_0101_0000,
-             0b_1111_1010,
-             0b_1111_1010,
-             0b_1111_1010,
-             0b_1111_1010,
+             0b_1_1_1_1_1_1_0_0,
+             0b_1_0_0_0_0_0_1_0,
+             0b_1_0_0_0_0_0_1_0,
+             0b_1_0_0_0_0_0_1_0,
+             0b_1_1_1_1_1_1_0_0,
+             0b_1_0_0_0_0_1_0_0,
+             0b_1_0_0_0_0_0_1_0,
+             0b_1_0_0_0_0_0_0_1,
         ];
 
         matrix.transpose();
@@ -723,14 +737,14 @@ mod tests {
         assert_eq!(
             matrix,
             [
-                0b_0000_0000,
-                0b_1111_0000,
-                0b_0000_0000,
-                0b_1111_0000,
-                0b_1111_1111,
-                0b_1111_0000,
-                0b_1111_1111,
-                0b_1111_0000,
+                0b_1_0_0_0_0_0_0_0,
+                0b_0_1_0_0_1_1_1_0,
+                0b_0_0_1_1_0_0_0_1,
+                0b_0_0_0_1_0_0_0_1,
+                0b_0_0_0_1_0_0_0_1,
+                0b_0_0_0_1_0_0_0_1,
+                0b_0_0_0_1_0_0_0_1,
+                0b_1_1_1_1_1_1_1_1,
             ]
         );
 
