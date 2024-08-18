@@ -25,8 +25,9 @@ pub trait BitOps {
 
     /// Moves the masked bits to the left by `shift` positions. For this function to work properly,
     /// the mask and the shifted mask should not overlap, ie. `mask & (mask << shift) == 0` and no
-    /// bits should be shifted out of the 64-bit integer, ie. `((mask << shift) >> shift) ==
-    /// mask`.
+    /// bits should be shifted out, ie. `((mask << shift) >> shift) ==  mask`.  Returns a tuple
+    /// where the first element is the new  value of `self` and the second element is the new value
+    /// of `other`.
     ///
     /// ```text
     ///   x <- abcd_efgh
@@ -47,8 +48,9 @@ pub trait BitOps {
     }
 
     /// Exchanges the masked bits in `self` with the bits in `other` masked by `mask << shift`. For
-    /// this function to work properly, no bits should be shifted out of the 64-bit integers,
-    /// ie. `((mask << shift) >> shift) == mask`.
+    /// this function to work properly, no bits should be shifted out, ie. `((mask << shift) >>
+    /// shift) == mask`. Returns a tuple where the first element is the new value of `self` and
+    /// the second element is the new value of `other`.
     ///
     /// ```text
     ///   a <- abcd_efgh
@@ -71,9 +73,9 @@ pub trait BitOps {
         (self ^ t, other ^ (t << shift))
     }
 
-    /// Exchanges the masked bits of `self` exchanged with the corresponding bits in `other`.
-    /// Returns a tuple where the first element is the new value of `self` and the second
-    /// element is the new value of `other`.
+    /// Exchanges the masked bits of `self` with the corresponding bits in `other`. Returns a tuple
+    /// where the first element is the new value of `self` and the second element is the new value
+    /// of `other`.
     ///
     /// ```text
     ///  a <- abcd_efgh
