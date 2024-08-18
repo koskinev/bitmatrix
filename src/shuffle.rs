@@ -1,4 +1,4 @@
-use std::ops::{BitAnd, BitOr, BitXor, BitXorAssign};
+use core::ops::{BitAnd, BitOr, BitXor, BitXorAssign, Shl, Shr};
 
 pub trait BitOps {
     /// Moves the bits of the value to the right according to `mask`.
@@ -22,6 +22,54 @@ pub trait BitOps {
     ///   c == abef_0000
     /// ```
     fn compress_left(self, mask: Self) -> Self;
+
+    /// Moves the masked bits to the left by `shift` positions. For this function to work properly,
+    /// the mask and the shifted mask should not overlap, ie. `mask & (mask << shift) == 0` and no
+    /// bits should be shifted out of the 64-bit integer, ie. `((mask << shift) >> shift) ==
+    /// mask`.
+    ///
+    /// ```text
+    ///   x <- abcd_efgh
+    ///   m <- 0001_0001
+    ///   s <- x.delta_swap(m, 3)
+    ///   s == dbca_hfge
+    /// ```
+    fn delta_swap(self, mask: Self, shift: u32) -> Self
+    where
+        Self: Copy,
+        Self: BitAnd<Output = Self>
+            + BitXor<Output = Self>
+            + Shr<u32, Output = Self>
+            + Shl<u32, Output = Self>,
+    {
+        let t = ((self >> shift) ^ self) & mask;
+        (self ^ t) ^ (t << shift)
+    }
+
+    /// Exchanges the masked bits in `self` with the bits in `other` masked by `mask << shift`. For
+    /// this function to work properly, no bits should be shifted out of the 64-bit integers,
+    /// ie. `((mask << shift) >> shift) == mask`.
+    ///
+    /// ```text
+    ///   a <- abcd_efgh
+    ///   b <- 0123_4567
+    ///   m <- 0001_0001
+    ///   (a, b) <- a.delta_exchange(b, m, 3)
+    ///   a == abc0_efd4
+    ///   b == d123_h567
+    /// ```
+    fn delta_exchange(self, other: Self, mask: Self, shift: u32) -> (Self, Self)
+    where
+        Self: Copy,
+        Self: BitAnd<Output = Self>
+            + BitXor<Output = Self>
+            + BitXorAssign
+            + Shr<u32, Output = Self>
+            + Shl<u32, Output = Self>,
+    {
+        let t = ((other >> shift) ^ self) & mask;
+        (self ^ t, other ^ (t << shift))
+    }
 
     /// Exchanges the masked bits of `self` exchanged with the corresponding bits in `other`.
     /// Returns a tuple where the first element is the new value of `self` and the second
@@ -731,7 +779,7 @@ mod tests {
     use super::BitOps;
 
     #[test]
-    fn test_features() {
+    fn print_features() {
         #[cfg(target_arch = "x86")]
         {
             print!("x86 ");
@@ -772,7 +820,7 @@ mod tests {
     }
 
     #[test]
-    fn test_compress() {
+    fn uint_compress() {
         // Test u8
         let u: u8 = 0b1010_1010;
         let m: u8 = 0b1100_1100;
@@ -817,6 +865,102 @@ mod tests {
         let expect_left: u128 = 0xAAAA_AAAA_AAAA_AAAA_0000_0000_0000_0000;
         assert_eq!(u.compress(m), expect);
         assert_eq!(u.compress_left(m), expect_left);
+    }
+
+    #[test]
+    fn uint_delta_swap() {
+        // Test u8
+        let u: u8 = 0b0101_1010;
+        let m: u8 = 0b0000_0101;
+        let shift: u32 = 4;
+        let expect: u8 = 0b0000_1111;
+        assert_eq!(u.delta_swap(m, shift), expect);
+
+        // Test u16
+        let u: u16 = 0b0000_0101_1010_1010;
+        let m: u16 = 0b0000_0000_0101_0101;
+        let shift: u32 = 8;
+        let expect: u16 = 0b0000_0000_1010_1111;
+        assert_eq!(u.delta_swap(m, shift), expect);
+
+        // Test u32
+        let u: u32 = 0b0000_0000_0000_0101_1010_1010_1010_1010;
+        let m: u32 = 0b0000_0000_0000_0000_0000_0000_0000_0101;
+        let shift: u32 = 16;
+        let expect: u32 = 0b0000_0000_0000_0000_1010_1010_1010_1111;
+        assert_eq!(u.delta_swap(m, shift), expect);
+
+        // Test u64
+        let u: u64 = 0xFFFF_FFFF_0000_0000;
+        let m: u64 = 0x0000_0000_AAAA_AAAA;
+        let expect: u64 = 0x5555_5555_AAAA_AAAA;
+        let shift: u32 = 32;
+        assert_eq!(u.delta_swap(m, shift), expect);
+
+        // Test u128
+        let u: u128 = 0xFFFF_FFFF_0000_0000_FFFF_FFFF_0000_0000;
+        let m: u128 = 0x0000_0000_AAAA_AAAA_0000_0000_AAAA_AAAA;
+        let expect: u128 = 0x5555_5555_AAAA_AAAA_5555_5555_AAAA_AAAA;
+        let shift: u32 = 32;
+        assert_eq!(u.delta_swap(m, shift), expect);
+    }
+
+    #[test]
+    fn uint_delta_exchange() {
+        // Test u8
+        let u: u8 = 0b0000_1010;
+        let v: u8 = 0b0101_0000;
+        let m: u8 = 0b0000_0101;
+        let shift: u32 = 4;
+        let expect_u: u8 = 0b0000_1111;
+        let expect_v: u8 = 0b0000_0000;
+        let (du, dv) = u.delta_exchange(v, m, shift);
+        assert_eq!(du, expect_u);
+        assert_eq!(dv, expect_v);
+
+        // Test u16
+        let u: u16 = 0b0000_0000_1010_1010;
+        let v: u16 = 0b0000_0101_0000_0000;
+        let m: u16 = 0b0000_0000_0101_0101;
+        let shift: u32 = 8;
+        let expect_u: u16 = 0b0000_0000_1010_1111;
+        let expect_v: u16 = 0b0000_0000_0000_0000;
+        let (du, dv) = u.delta_exchange(v, m, shift);
+        assert_eq!(du, expect_u);
+        assert_eq!(dv, expect_v);
+
+        // Test u32
+        let u: u32 = 0b0000_0000_0000_0000_1010_1010_1010_1010;
+        let v: u32 = 0b0000_0000_0000_0000_0000_0101_0000_0000;
+        let m: u32 = 0b0000_0000_0000_0000_0000_0000_0000_0101;
+        let shift: u32 = 8;
+        let expect_u: u32 = 0b0000_0000_0000_0000_1010_1010_1010_1111;
+        let expect_v: u32 = 0b0000_0000_0000_0000_0000_0000_0000_0000;
+        let (du, dv) = u.delta_exchange(v, m, shift);
+        assert_eq!(du, expect_u);
+        assert_eq!(dv, expect_v);
+
+        // Test u64
+        let u: u64 = 0x0000_0000_AAAA_AAAA;
+        let v: u64 = 0x0000_FFFF_0000_0000;
+        let m: u64 = 0x0000_0000_0000_1111;
+        let shift: u32 = 32;
+        let expect_u: u64 = 0x0000_0000_AAAA_BBBB;
+        let expect_v: u64 = 0x0000_EEEE_0000_0000;
+        let (du, dv) = u.delta_exchange(v, m, shift);
+        assert_eq!(du, expect_u);
+        assert_eq!(dv, expect_v);
+
+        // Test u128
+        let u: u128 = 0x0000_0000_0000_0000_AAAA_AAAA_AAAA_AAAA;
+        let v: u128 = 0xFFFF_0000_0000_FFFF_0000_0000_0000_0000;
+        let m: u128 = 0x0000_0000_0000_1111_0000_0000_0000_1111;
+        let shift: u32 = 64;
+        let expect_u: u128 = 0x0000_0000_0000_0000_AAAA_AAAA_AAAA_BBBB;
+        let expect_v: u128 = 0xFFFF_0000_0000_EEEE_0000_0000_0000_0000;
+        let (du, dv) = u.delta_exchange(v, m, shift);
+        assert_eq!(du, expect_u);
+        assert_eq!(dv, expect_v);
     }
 
     #[test]
