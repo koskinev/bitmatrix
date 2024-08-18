@@ -548,61 +548,32 @@ impl BitMatrix for [u16; 16] {
         //     }
         // }
 
-        let mut a = ((self[15] as u64) << 48)
-            | ((self[14] as u64) << 32)
-            | ((self[13] as u64) << 16)
-            | (self[12] as u64);
-        let mut b = ((self[11] as u64) << 48)
-            | ((self[10] as u64) << 32)
-            | ((self[9] as u64) << 16)
-            | (self[8] as u64);
-        let mut c = ((self[7] as u64) << 48)
-            | ((self[6] as u64) << 32)
-            | ((self[5] as u64) << 16)
-            | (self[4] as u64);
-        let mut d = ((self[3] as u64) << 48)
-            | ((self[2] as u64) << 32)
-            | ((self[1] as u64) << 16)
-            | (self[0] as u64);
+        let ptr: *mut [u64; 4] = self.as_mut_ptr().cast();
+        let mut u64s = unsafe { ptr.read_unaligned() };
+        let [d, c, b, a] = &mut u64s;
 
         const MASK0: u64 = 0xF000F000F000F000;
         const MASK1: u64 = 0x0000_AAAA_0000_AAAA;
         const MASK2: u64 = 0x0000_0000_CCCC_CCCC;
-        const U16_MAX: u64 = 0xFFFF_FFFF_FFFF_FFFF;
+        
+        (*a, *b) = a.delta_exchange(*b, MASK0 >> 4, 4);
+        (*a, *c) = a.delta_exchange(*c, MASK0 >> 8, 8);
+        (*a, *d) = a.delta_exchange(*d, MASK0 >> 12, 12);
+        (*b, *c) = b.delta_exchange(*c, MASK0 >> 8, 4);
+        (*b, *d) = b.delta_exchange(*d, MASK0 >> 12, 8);
+        (*c, *d) = c.delta_exchange(*d, MASK0 >> 12, 4);
 
-        (a, b) = a.delta_exchange(b, MASK0 >> 4, 4);
-        (a, c) = a.delta_exchange(c, MASK0 >> 8, 8);
-        (a, d) = a.delta_exchange(d, MASK0 >> 12, 12);
-        (b, c) = b.delta_exchange(c, MASK0 >> 8, 4);
-        (b, d) = b.delta_exchange(d, MASK0 >> 12, 8);
-        (c, d) = c.delta_exchange(d, MASK0 >> 12, 4);
+        *a = a.delta_swap(MASK1, 15);
+        *b = b.delta_swap(MASK1, 15);
+        *c = c.delta_swap(MASK1, 15);
+        *d = d.delta_swap(MASK1, 15);
 
-        a = a.delta_swap(MASK1, 15);
-        b = b.delta_swap(MASK1, 15);
-        c = c.delta_swap(MASK1, 15);
-        d = d.delta_swap(MASK1, 15);
+        *a = a.delta_swap(MASK2, 30);
+        *b = b.delta_swap(MASK2, 30);
+        *c = c.delta_swap(MASK2, 30);
+        *d = d.delta_swap(MASK2, 30);
 
-        a = a.delta_swap(MASK2, 30);
-        b = b.delta_swap(MASK2, 30);
-        c = c.delta_swap(MASK2, 30);
-        d = d.delta_swap(MASK2, 30);
-
-        self[15] = (U16_MAX & (a >> 48)) as u16;
-        self[14] = (U16_MAX & (a >> 32)) as u16;
-        self[13] = (U16_MAX & (a >> 16)) as u16;
-        self[12] = (U16_MAX & a) as u16;
-        self[11] = (U16_MAX & (b >> 48)) as u16;
-        self[10] = (U16_MAX & (b >> 32)) as u16;
-        self[9] = (U16_MAX & (b >> 16)) as u16;
-        self[8] = (U16_MAX & b) as u16;
-        self[7] = (U16_MAX & (c >> 48)) as u16;
-        self[6] = (U16_MAX & (c >> 32)) as u16;
-        self[5] = (U16_MAX & (c >> 16)) as u16;
-        self[4] = (U16_MAX & c) as u16;
-        self[3] = (U16_MAX & (d >> 48)) as u16;
-        self[2] = (U16_MAX & (d >> 32)) as u16;
-        self[1] = (U16_MAX & (d >> 16)) as u16;
-        self[0] = (U16_MAX & d) as u16;
+        unsafe { ptr.write_unaligned(u64s) };
 
         // An alternative implemetation adapted from the algorithm described in Hacker's
         // Delight 2nd ed. by Henry S. Warren, Jr. (2013), section 7-3 "Transposing a
