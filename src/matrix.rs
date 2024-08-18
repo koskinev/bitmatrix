@@ -473,148 +473,208 @@ impl BitMatrix for [u16; 16] {
     }
 
     fn transpose(&mut self) {
-        #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
-        {
-            if is_x86_feature_detected!("sse2") && is_x86_feature_detected!("avx2") {
-                // We treat the 16x16 matrix as four 8x8 blocks and transpose each block in-place.
-                //
-                //  A B => A'B' => A'B'
-                //  C D    C'D'    C'D'
-                //
-                // The steps are:
-                // - convert the matrix to a row blocked format
-                // - transpose each block in-place with a 8x8 transpose
-                // - swap the 2nd and 3rd blocks
-                // - convert the matrix back to a column blocked format
-                //
-                // The conversion to and from the row blocked format can be visualized by viewing
-                // the matrix as an 16x2 array of bytes, where each byte is a row in an 8x8 matrix.
-                // We shuffle the rows as follows:
-                // ```text
-                // 
-                //  Index       Initial        Row blocked:    Mapping:  Reverse:
-                //
-                //  [ 0,  1,    [ a0, b0,  =>  [ a0, a1,       [  0, 2,   [  0,  8,
-                //    2,  3,      a1, b1,        a2, a3,          4, 6,      1,  9,
-                //    4,  5,      a2, b2,        a4, a5,          8, 10,     2, 10,
-                //    6,  7,      a3, b3,        a6, a7,         12, 14,     3, 11,
-                //    8,  9,      a4, b4,        b0, b1,          1,  3,     4, 12,
-                //   10, 11,      a5, b5,        b2, b3,          5,  7,     5, 13,
-                //   12, 13,      a6  b6,        b4, b5,          9, 11,     6, 14,
-                //   14, 15,      a7, b7,        b6, b7,         13, 15,     7, 15,
-                //   16, 17,      c0, d0,        c0, c1,         16, 18,    16, 24,
-                //   18, 19,      c1, d1,        c2, c3,         20, 22,    17, 25,
-                //   20, 21,      c2, d2,        c4, c5,         24, 26,    18, 26,
-                //   22, 23,      c3, d3,        c6, c7,         28, 30,    19, 27,
-                //   24, 25,      c4, d4,        d0, d1,         17, 19,    20, 28,
-                //   26, 27,      c5, d5,        d2, d3,         21, 23,    21, 29,
-                //   28, 29,      c6, d6,        d4, d5,         25, 27,    22, 30,
-                //   30, 31, ]    c7, d7, ]      d6, d7, ]       29, 31,    23, 31, ]
-                // ```
-                //
-                // The reverse operation can be reversed by repeating the shuffle with the same
-                // mapping.
+        // #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+        // {
+        //     if is_x86_feature_detected!("sse2") && is_x86_feature_detected!("avx2") {
+        //         // We treat the 16x16 matrix as four 8x8 blocks and transpose each block
+        //         // in-place.
+        //         //
+        //         //  A B => A'B' => A'B'
+        //         //  C D    C'D'    C'D'
+        //         //
+        //         // The steps are:
+        //         // - convert the matrix to a row blocked format
+        //         // - transpose each block in-place with a 8x8 transpose
+        //         // - swap the 2nd and 3rd blocks
+        //         // - convert the matrix back to a column blocked format
+        //         //
+        //         // The conversion to and from the row blocked format can be visualized by viewing
+        //         // the matrix as an 16x2 array of bytes, where each byte is a row in an 8x8
+        //         // matrix. We shuffle the rows as follows:
+        //         // ```text
+        //         //
+        //         //  Index       Initial        Row blocked:    Mapping:  Reverse:
+        //         //
+        //         //  [ 0,  1,    [ a0, b0,  =>  [ a0, a1,       [  0, 2,   [  0,  8,
+        //         //    2,  3,      a1, b1,        a2, a3,          4, 6,      1,  9,
+        //         //    4,  5,      a2, b2,        a4, a5,          8, 10,     2, 10,
+        //         //    6,  7,      a3, b3,        a6, a7,         12, 14,     3, 11,
+        //         //    8,  9,      a4, b4,        b0, b1,          1,  3,     4, 12,
+        //         //   10, 11,      a5, b5,        b2, b3,          5,  7,     5, 13,
+        //         //   12, 13,      a6  b6,        b4, b5,          9, 11,     6, 14,
+        //         //   14, 15,      a7, b7,        b6, b7,         13, 15,     7, 15,
+        //         //   16, 17,      c0, d0,        c0, c1,         16, 18,    16, 24,
+        //         //   18, 19,      c1, d1,        c2, c3,         20, 22,    17, 25,
+        //         //   20, 21,      c2, d2,        c4, c5,         24, 26,    18, 26,
+        //         //   22, 23,      c3, d3,        c6, c7,         28, 30,    19, 27,
+        //         //   24, 25,      c4, d4,        d0, d1,         17, 19,    20, 28,
+        //         //   26, 27,      c5, d5,        d2, d3,         21, 23,    21, 29,
+        //         //   28, 29,      c6, d6,        d4, d5,         25, 27,    22, 30,
+        //         //   30, 31, ]    c7, d7, ]      d6, d7, ]       29, 31,    23, 31, ]
+        //         // ```
+        //         //
+        //         // The reverse operation can be reversed by repeating the shuffle with the same
+        //         // mapping.
 
-                // shuffle_bytes requires a 32 byte mapping vector, where each byte is an
-                // index into two 128-bit lanes. The mapping is applied to each 128-bit lane
-                // separately.
-                const BLOCK: [u8; 32] = [
-                    0, 2, 4, 6, 8, 10, 12, 14, 1, 3, 5, 7, 9, 11, 13, 15, // 1st half
-                    0, 2, 4, 6, 8, 10, 12, 14, 1, 3, 5, 7, 9, 11, 13, 15, // 2nd half
-                ];
+        //         // shuffle_bytes requires a 32 byte mapping vector, where each byte is an
+        //         // index into two 128-bit lanes. The mapping is applied to each 128-bit lane
+        //         // separately.
+        //         const BLOCK: [u8; 32] = [
+        //             0, 2, 4, 6, 8, 10, 12, 14, 1, 3, 5, 7, 9, 11, 13, 15, // 1st half
+        //             0, 2, 4, 6, 8, 10, 12, 14, 1, 3, 5, 7, 9, 11, 13, 15, // 2nd half
+        //         ];
 
-                const UNBLOCK: [u8; 32] = [
-                    0, 8, 1, 9, 2, 10, 3, 11, 4, 12, 5, 13, 6, 14, 7, 15, // ...
-                    0, 8, 1, 9, 2, 10, 3, 11, 4, 12, 5, 13, 6, 14, 7, 15,
-                ];
+        //         const UNBLOCK: [u8; 32] = [
+        //             0, 8, 1, 9, 2, 10, 3, 11, 4, 12, 5, 13, 6, 14, 7, 15, // ...
+        //             0, 8, 1, 9, 2, 10, 3, 11, 4, 12, 5, 13, 6, 14, 7, 15,
+        //         ];
 
-                let this: &mut [u8; 32] = unsafe { &mut *self.as_mut_ptr().cast() };
-                shuffle_bytes(this, &BLOCK);
+        //         let this: &mut [u8; 32] = unsafe { &mut *self.as_mut_ptr().cast() };
+        //         shuffle_bytes(this, &BLOCK);
 
-                // Each 8x8 block is transposed in-place.
-                let blocks: &mut [[u8; 8]; 4] = unsafe { &mut *self.as_mut_ptr().cast() };
-                for block in blocks.iter_mut() {
-                    block.transpose();
-                }
+        //         // Each 8x8 block is transposed in-place.
+        //         let blocks: &mut [[u8; 8]; 4] = unsafe { &mut *self.as_mut_ptr().cast() };
+        //         for block in blocks.iter_mut() {
+        //             block.transpose();
+        //         }
 
-                // The 2nd and 3rd blocks are swapped.
-                blocks.swap(1, 2);
+        //         // The 2nd and 3rd blocks are swapped.
+        //         blocks.swap(1, 2);
 
-                // Finally, the matrix is converted back to it's original format.
-                shuffle_bytes(this, &UNBLOCK);
+        //         // Finally, the matrix is converted back to it's original format.
+        //         shuffle_bytes(this, &UNBLOCK);
 
-                return;
-            }
-        }
+        //         return;
+        //     }
+        // }
 
-        // The fallback implementation is adapted from the algorithm described in Hacker's Delight
-        // 2nd ed. by Henry S. Warren, Jr. (2013), section 7-3 "Transposing a Bit Matrix".
-        let [a00, a01, a02, a03, a04, a05, a06, a07, a08, a09, a10, a11, a12, a13, a14, a15] = self;
+        let mut a = ((self[15] as u64) << 48)
+            | ((self[14] as u64) << 32)
+            | ((self[13] as u64) << 16)
+            | (self[12] as u64);
+        let mut b = ((self[11] as u64) << 48)
+            | ((self[10] as u64) << 32)
+            | ((self[9] as u64) << 16)
+            | (self[8] as u64);
+        let mut c = ((self[7] as u64) << 48)
+            | ((self[6] as u64) << 32)
+            | ((self[5] as u64) << 16)
+            | (self[4] as u64);
+        let mut d = ((self[3] as u64) << 48)
+            | ((self[2] as u64) << 32)
+            | ((self[1] as u64) << 16)
+            | (self[0] as u64);
 
-        let mut mask = u16::MAX;
+        const MASK0: u64 = 0xF000F000F000F000;
+        const MASK1: u64 = 0x0000_AAAA_0000_AAAA;
+        const MASK2: u64 = 0x0000_0000_CCCC_CCCC;
+        const U16_MAX: u64 = 0xFFFF_FFFF_FFFF_FFFF;
 
-        macro_rules! rot_exchange {
-            ($a:expr, $b:expr, $rot:expr) => {
-                *$b = $b.rotate_left($rot);
-                (*$a, *$b) = $a.exchange(*$b, mask);
-            };
-        }
+        (a, b) = a.delta_exchange(b, MASK0 >> 4, 4);
+        (a, c) = a.delta_exchange(c, MASK0 >> 8, 8);
+        (a, d) = a.delta_exchange(d, MASK0 >> 12, 12);
+        (b, c) = b.delta_exchange(c, MASK0 >> 8, 4);
+        (b, d) = b.delta_exchange(d, MASK0 >> 12, 8);
+        (c, d) = c.delta_exchange(d, MASK0 >> 12, 4);
 
-        mask ^= mask >> 8;
-        rot_exchange!(a00, a08, 8);
-        rot_exchange!(a01, a09, 8);
-        rot_exchange!(a02, a10, 8);
-        rot_exchange!(a03, a11, 8);
-        rot_exchange!(a04, a12, 8);
-        rot_exchange!(a05, a13, 8);
-        rot_exchange!(a06, a14, 8);
-        rot_exchange!(a07, a15, 8);
+        a = a.delta_swap(MASK1, 15);
+        b = b.delta_swap(MASK1, 15);
+        c = c.delta_swap(MASK1, 15);
+        d = d.delta_swap(MASK1, 15);
 
-        mask ^= mask >> 4;
-        rot_exchange!(a00, a04, 4);
-        rot_exchange!(a01, a05, 4);
-        rot_exchange!(a02, a06, 4);
-        rot_exchange!(a03, a07, 4);
-        rot_exchange!(a08, a12, 4);
-        rot_exchange!(a09, a13, 4);
-        rot_exchange!(a10, a14, 4);
-        rot_exchange!(a11, a15, 4);
+        a = a.delta_swap(MASK2, 30);
+        b = b.delta_swap(MASK2, 30);
+        c = c.delta_swap(MASK2, 30);
+        d = d.delta_swap(MASK2, 30);
 
-        mask ^= mask >> 2;
-        rot_exchange!(a00, a02, 2);
-        rot_exchange!(a01, a03, 2);
-        rot_exchange!(a04, a06, 2);
-        rot_exchange!(a05, a07, 2);
-        rot_exchange!(a08, a10, 2);
-        rot_exchange!(a09, a11, 2);
-        rot_exchange!(a12, a14, 2);
-        rot_exchange!(a13, a15, 2);
+        self[15] = (U16_MAX & (a >> 48)) as u16;
+        self[14] = (U16_MAX & (a >> 32)) as u16;
+        self[13] = (U16_MAX & (a >> 16)) as u16;
+        self[12] = (U16_MAX & a) as u16;
+        self[11] = (U16_MAX & (b >> 48)) as u16;
+        self[10] = (U16_MAX & (b >> 32)) as u16;
+        self[9] = (U16_MAX & (b >> 16)) as u16;
+        self[8] = (U16_MAX & b) as u16;
+        self[7] = (U16_MAX & (c >> 48)) as u16;
+        self[6] = (U16_MAX & (c >> 32)) as u16;
+        self[5] = (U16_MAX & (c >> 16)) as u16;
+        self[4] = (U16_MAX & c) as u16;
+        self[3] = (U16_MAX & (d >> 48)) as u16;
+        self[2] = (U16_MAX & (d >> 32)) as u16;
+        self[1] = (U16_MAX & (d >> 16)) as u16;
+        self[0] = (U16_MAX & d) as u16;
 
-        mask ^= mask >> 1;
-        rot_exchange!(a00, a01, 1);
-        rot_exchange!(a02, a03, 1);
-        rot_exchange!(a04, a05, 1);
-        rot_exchange!(a06, a07, 1);
-        rot_exchange!(a08, a09, 1);
-        rot_exchange!(a10, a11, 1);
-        rot_exchange!(a12, a13, 1);
-        rot_exchange!(a14, a15, 1);
+        // An alternative implemetation adapted from the algorithm described in Hacker's
+        // Delight 2nd ed. by Henry S. Warren, Jr. (2013), section 7-3 "Transposing a
+        // Bit Matrix".
 
-        *a01 = a01.rotate_right(1);
-        *a02 = a02.rotate_right(2);
-        *a03 = a03.rotate_right(3);
-        *a04 = a04.rotate_right(4);
-        *a05 = a05.rotate_right(5);
-        *a06 = a06.rotate_right(6);
-        *a07 = a07.rotate_right(7);
-        *a08 = a08.rotate_right(8);
-        *a09 = a09.rotate_right(9);
-        *a10 = a10.rotate_right(10);
-        *a11 = a11.rotate_right(11);
-        *a12 = a12.rotate_right(12);
-        *a13 = a13.rotate_right(13);
-        *a14 = a14.rotate_right(14);
-        *a15 = a15.rotate_right(15);
+        //     let [a00, a01, a02, a03, a04, a05, a06, a07, a08, a09, a10, a11, a12, a13, a14, a15]
+        // = self;
+
+        //     let mut mask = u16::MAX;
+
+        //     macro_rules! rot_exchange {
+        //         ($a:expr, $b:expr, $rot:expr) => {
+        //             *$b = $b.rotate_left($rot);
+        //             (*$a, *$b) = $a.exchange(*$b, mask);
+        //         };
+        //     }
+
+        //     mask ^= mask >> 8;
+        //     rot_exchange!(a00, a08, 8);
+        //     rot_exchange!(a01, a09, 8);
+        //     rot_exchange!(a02, a10, 8);
+        //     rot_exchange!(a03, a11, 8);
+        //     rot_exchange!(a04, a12, 8);
+        //     rot_exchange!(a05, a13, 8);
+        //     rot_exchange!(a06, a14, 8);
+        //     rot_exchange!(a07, a15, 8);
+
+        //     mask ^= mask >> 4;
+        //     rot_exchange!(a00, a04, 4);
+        //     rot_exchange!(a01, a05, 4);
+        //     rot_exchange!(a02, a06, 4);
+        //     rot_exchange!(a03, a07, 4);
+        //     rot_exchange!(a08, a12, 4);
+        //     rot_exchange!(a09, a13, 4);
+        //     rot_exchange!(a10, a14, 4);
+        //     rot_exchange!(a11, a15, 4);
+
+        //     mask ^= mask >> 2;
+        //     rot_exchange!(a00, a02, 2);
+        //     rot_exchange!(a01, a03, 2);
+        //     rot_exchange!(a04, a06, 2);
+        //     rot_exchange!(a05, a07, 2);
+        //     rot_exchange!(a08, a10, 2);
+        //     rot_exchange!(a09, a11, 2);
+        //     rot_exchange!(a12, a14, 2);
+        //     rot_exchange!(a13, a15, 2);
+
+        //     mask ^= mask >> 1;
+        //     rot_exchange!(a00, a01, 1);
+        //     rot_exchange!(a02, a03, 1);
+        //     rot_exchange!(a04, a05, 1);
+        //     rot_exchange!(a06, a07, 1);
+        //     rot_exchange!(a08, a09, 1);
+        //     rot_exchange!(a10, a11, 1);
+        //     rot_exchange!(a12, a13, 1);
+        //     rot_exchange!(a14, a15, 1);
+
+        //     *a01 = a01.rotate_right(1);
+        //     *a02 = a02.rotate_right(2);
+        //     *a03 = a03.rotate_right(3);
+        //     *a04 = a04.rotate_right(4);
+        //     *a05 = a05.rotate_right(5);
+        //     *a06 = a06.rotate_right(6);
+        //     *a07 = a07.rotate_right(7);
+        //     *a08 = a08.rotate_right(8);
+        //     *a09 = a09.rotate_right(9);
+        //     *a10 = a10.rotate_right(10);
+        //     *a11 = a11.rotate_right(11);
+        //     *a12 = a12.rotate_right(12);
+        //     *a13 = a13.rotate_right(13);
+        //     *a14 = a14.rotate_right(14);
+        //     *a15 = a15.rotate_right(15);
     }
 }
 
