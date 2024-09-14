@@ -263,6 +263,53 @@ impl BitMatrix for [u8; 8] {
     }
 
     fn matmul(&self, rhs: &Self) -> Self {
+        // Multiplication of two 8x8 bit matrices stored in 64-bit integers A and B.
+        //
+        // A                                 B
+        //
+        // a00 a01 a02 a03 a04 a05 a06 a07   b00 b01 b02 b03 b04 b05 b06 b07
+        // a10 a11 a12 a13 a14 a15 a16 a17   b10 b11 b12 b13 b14 b15 b16 b17
+        // a20 a21 a22 a23 a24 a25 a26 a27   b20 b21 b22 b23 b24 b25 b26 b27
+        // a30 a31 a32 a33 a34 a35 a36 a37   b30 b31 b32 b33 b34 b35 b36 b37
+        // a40 a41 a42 a43 a44 a45 a46 a47   b40 b41 b42 b43 b44 b45 b46 b47
+        // a50 a51 a52 a53 a54 a55 a56 a57   b50 b51 b52 b53 b54 b55 b56 b57
+        // a60 a61 a62 a63 a64 a65 a66 a67   b60 b61 b62 b63 b64 b65 b66 b67
+        // a70 a71 a72 a73 a74 a75 a76 a77   b70 b71 b72 b73 b74 b75 b76 b77
+        //
+        // The element on the `i`th row and `j`th column cij of the resulting matrix
+        //
+        // cij = (ai0 & b0j) ^ (ai1 & b1j) ^ ... ^ (ai7 & b7j).
+        //
+        // The function uses two masks. The first masks a row in A and the second 
+        // a column in B.
+        //
+        // COL                ROW
+        //
+        // 0 0 0 0 0 0 0 1    0 0 0 0 0 0 0 0
+        // 0 0 0 0 0 0 0 1    0 0 0 0 0 0 0 0
+        // 0 0 0 0 0 0 0 1    0 0 0 0 0 0 0 0
+        // 0 0 0 0 0 0 0 1    0 0 0 0 0 0 0 0
+        // 0 0 0 0 0 0 0 1    0 0 0 0 0 0 0 0
+        // 0 0 0 0 0 0 0 1    0 0 0 0 0 0 0 0
+        // 0 0 0 0 0 0 0 1    0 0 0 0 0 0 0 0
+        // 0 0 0 0 0 0 0 1    1 1 1 1 1 1 1 1
+        //
+        // D = (COL & A) * (ROW & B) gives the result:
+        //
+        // (a70 & b07) (a70 & b17) . . . (a70 & b77)
+        // (a71 & b07)    . . .          (a71 & b77)
+        //      .          .                  .
+        //      .            .                .
+        //      .              .              .
+        // (a76 & b07)      . . .        (a76 & b77)
+        // (a77 & b07) (a77 & b17) . . . (a77 & b77)
+        //
+        // or dij = a7i & bj7, which is the last element in the XOR sum above. The
+        // second to last element of the sum a6i & bj6 can be calculated by shifting 
+        // A to the right by on (moving the columns to the left by one) and B to 
+        // the left by8 (moving the rows down by one). The rest of the sum can be
+        // calculated in a similar way.
+        
         const ROW: u64 = 0x00000000000000FF;
         const COL: u64 = 0x0101010101010101;
 
@@ -325,17 +372,20 @@ impl BitMatrix for [u8; 8] {
     }
 
     fn transpose(&mut self) {
-        // The following code was generated using the bit permutation calculator source code
-        // available at https://programming.sirrida.de/sources.zip
-        fn permute_step(x: u64, m: u64, shift: u32) -> u64 {
-            let t = ((x >> shift) ^ x) & m;
-            (x ^ t) ^ (t << shift)
-        }
+        // Input:    Mask 0:   Step 0:   Mask 1:   Step 1:  Mask 2:   Result:
+        // .$ZYXWVU  00000000  .TZRXPVN  00000000  .TLDXPHz 00000000  .TLDvnf7
+        // TSRQPONM  10101010  $SYQWOUM  00000000  $SKCWOGy 00000000  $SKCume6
+        // LKJIHGFE  00000000  LDJBHzFx  11001100  ZRJBVNFx 00000000  ZRJBtld5
+        // DCBAzyxw  10101010  KCIAGyEw  11001100  YQIAUMEw 00000000  YQIAskc4
+        // vutsrqpo  00000000  vntlrjph  00000000  vnf7rjb3 11110000  XPHzrjb3
+        // nmlkjihg  10101010  umskqiog  00000000  ume6qia2 11110000  WOGyqia2
+        // fedcba98  00000000  f7d5b391  11001100  tld5ph91 11110000  VNFxph91
+        // 76543210  10101010  e6c4a280  11001100  skc4og80 11110000  UMEwog80
 
         let mut x = u64::from_ne_bytes(*self);
-        x = permute_step(x, 0x00aa00aa00aa00aa, 7);
-        x = permute_step(x, 0x0000cccc0000cccc, 14);
-        x = permute_step(x, 0x00000000f0f0f0f0, 28);
+        x = delta_swap(x, 0x00aa00aa00aa00aa, 7);
+        x = delta_swap(x, 0x0000cccc0000cccc, 14);
+        x = delta_swap(x, 0x00000000f0f0f0f0, 28);
         *self = x.to_ne_bytes();
 
         // An alternative implementation from Hacker's Delight 2nd ed. by Henry S. Warren, Jr.
@@ -473,180 +523,111 @@ impl BitMatrix for [u16; 16] {
     }
 
     fn transpose(&mut self) {
-        // #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
-        // {
-        //     if is_x86_feature_detected!("sse2") && is_x86_feature_detected!("avx2") {
-        //         // We treat the 16x16 matrix as four 8x8 blocks and transpose each block
-        //         // in-place.
-        //         //
-        //         //  A B => A'B' => A'B'
-        //         //  C D    C'D'    C'D'
-        //         //
-        //         // The steps are:
-        //         // - convert the matrix to a row blocked format
-        //         // - transpose each block in-place with a 8x8 transpose
-        //         // - swap the 2nd and 3rd blocks
-        //         // - convert the matrix back to a column blocked format
-        //         //
-        //         // The conversion to and from the row blocked format can be visualized by viewing
-        //         // the matrix as an 16x2 array of bytes, where each byte is a row in an 8x8
-        //         // matrix. We shuffle the rows as follows:
-        //         // ```text
-        //         //
-        //         //  Index       Initial        Row blocked:    Mapping:  Reverse:
-        //         //
-        //         //  [ 0,  1,    [ a0, b0,  =>  [ a0, a1,       [  0, 2,   [  0,  8,
-        //         //    2,  3,      a1, b1,        a2, a3,          4, 6,      1,  9,
-        //         //    4,  5,      a2, b2,        a4, a5,          8, 10,     2, 10,
-        //         //    6,  7,      a3, b3,        a6, a7,         12, 14,     3, 11,
-        //         //    8,  9,      a4, b4,        b0, b1,          1,  3,     4, 12,
-        //         //   10, 11,      a5, b5,        b2, b3,          5,  7,     5, 13,
-        //         //   12, 13,      a6  b6,        b4, b5,          9, 11,     6, 14,
-        //         //   14, 15,      a7, b7,        b6, b7,         13, 15,     7, 15,
-        //         //   16, 17,      c0, d0,        c0, c1,         16, 18,    16, 24,
-        //         //   18, 19,      c1, d1,        c2, c3,         20, 22,    17, 25,
-        //         //   20, 21,      c2, d2,        c4, c5,         24, 26,    18, 26,
-        //         //   22, 23,      c3, d3,        c6, c7,         28, 30,    19, 27,
-        //         //   24, 25,      c4, d4,        d0, d1,         17, 19,    20, 28,
-        //         //   26, 27,      c5, d5,        d2, d3,         21, 23,    21, 29,
-        //         //   28, 29,      c6, d6,        d4, d5,         25, 27,    22, 30,
-        //         //   30, 31, ]    c7, d7, ]      d6, d7, ]       29, 31,    23, 31, ]
-        //         // ```
-        //         //
-        //         // The reverse operation can be reversed by repeating the shuffle with the same
-        //         // mapping.
-
-        //         // shuffle_bytes requires a 32 byte mapping vector, where each byte is an
-        //         // index into two 128-bit lanes. The mapping is applied to each 128-bit lane
-        //         // separately.
-        //         const BLOCK: [u8; 32] = [
-        //             0, 2, 4, 6, 8, 10, 12, 14, 1, 3, 5, 7, 9, 11, 13, 15, // 1st half
-        //             0, 2, 4, 6, 8, 10, 12, 14, 1, 3, 5, 7, 9, 11, 13, 15, // 2nd half
-        //         ];
-
-        //         const UNBLOCK: [u8; 32] = [
-        //             0, 8, 1, 9, 2, 10, 3, 11, 4, 12, 5, 13, 6, 14, 7, 15, // ...
-        //             0, 8, 1, 9, 2, 10, 3, 11, 4, 12, 5, 13, 6, 14, 7, 15,
-        //         ];
-
-        //         let this: &mut [u8; 32] = unsafe { &mut *self.as_mut_ptr().cast() };
-        //         shuffle_bytes(this, &BLOCK);
-
-        //         // Each 8x8 block is transposed in-place.
-        //         let blocks: &mut [[u8; 8]; 4] = unsafe { &mut *self.as_mut_ptr().cast() };
-        //         for block in blocks.iter_mut() {
-        //             block.transpose();
-        //         }
-
-        //         // The 2nd and 3rd blocks are swapped.
-        //         blocks.swap(1, 2);
-
-        //         // Finally, the matrix is converted back to it's original format.
-        //         shuffle_bytes(this, &UNBLOCK);
-
-        //         return;
-        //     }
-        // }
+        const MASK0: [u64; 4] = [0xAAAA0000AAAA; 4];
+        const MASK1: [u64; 4] = [0xCCCCCCCC; 4];
+        const MASK2: [u64; 4] = [0xF0F0F0F0F0F0F0F0, 0, 0xF0F0F0F0F0F0F0F0, 0];
+        const MASK3: [u64; 4] = [0xFF00FF00FF00FF00, 0xFF00FF00FF00FF00, 0, 0];
 
         let ptr: *mut [u64; 4] = self.as_mut_ptr().cast();
-        let mut u64s = unsafe { ptr.read_unaligned() };
-        let [d, c, b, a] = &mut u64s;
+        let mut x = unsafe { ptr.read_unaligned() };
 
-        const MASK0: u64 = 0xF000F000F000F000;
-        const MASK1: u64 = 0x0000_AAAA_0000_AAAA;
-        const MASK2: u64 = 0x0000_0000_CCCC_CCCC;
-        
-        (*a, *b) = a.delta_exchange(*b, MASK0 >> 4, 4);
-        (*a, *c) = a.delta_exchange(*c, MASK0 >> 8, 8);
-        (*a, *d) = a.delta_exchange(*d, MASK0 >> 12, 12);
-        (*b, *c) = b.delta_exchange(*c, MASK0 >> 8, 4);
-        (*b, *d) = b.delta_exchange(*d, MASK0 >> 12, 8);
-        (*c, *d) = c.delta_exchange(*d, MASK0 >> 12, 4);
+        x = long_delta_swap(x, MASK0, 15);
+        x = long_delta_swap(x, MASK1, 30);
+        x = long_delta_swap(x, MASK2, 60);
+        x = long_delta_swap(x, MASK3, 120);
 
-        *a = a.delta_swap(MASK1, 15);
-        *b = b.delta_swap(MASK1, 15);
-        *c = c.delta_swap(MASK1, 15);
-        *d = d.delta_swap(MASK1, 15);
+        unsafe { ptr.write_unaligned(x) };
 
-        *a = a.delta_swap(MASK2, 30);
-        *b = b.delta_swap(MASK2, 30);
-        *c = c.delta_swap(MASK2, 30);
-        *d = d.delta_swap(MASK2, 30);
-
-        unsafe { ptr.write_unaligned(u64s) };
-
-        // An alternative implemetation adapted from the algorithm described in Hacker's
-        // Delight 2nd ed. by Henry S. Warren, Jr. (2013), section 7-3 "Transposing a
-        // Bit Matrix".
-
-        //     let [a00, a01, a02, a03, a04, a05, a06, a07, a08, a09, a10, a11, a12, a13, a14, a15]
-        // = self;
-
-        //     let mut mask = u16::MAX;
-
-        //     macro_rules! rot_exchange {
-        //         ($a:expr, $b:expr, $rot:expr) => {
-        //             *$b = $b.rotate_left($rot);
-        //             (*$a, *$b) = $a.exchange(*$b, mask);
-        //         };
-        //     }
-
-        //     mask ^= mask >> 8;
-        //     rot_exchange!(a00, a08, 8);
-        //     rot_exchange!(a01, a09, 8);
-        //     rot_exchange!(a02, a10, 8);
-        //     rot_exchange!(a03, a11, 8);
-        //     rot_exchange!(a04, a12, 8);
-        //     rot_exchange!(a05, a13, 8);
-        //     rot_exchange!(a06, a14, 8);
-        //     rot_exchange!(a07, a15, 8);
-
-        //     mask ^= mask >> 4;
-        //     rot_exchange!(a00, a04, 4);
-        //     rot_exchange!(a01, a05, 4);
-        //     rot_exchange!(a02, a06, 4);
-        //     rot_exchange!(a03, a07, 4);
-        //     rot_exchange!(a08, a12, 4);
-        //     rot_exchange!(a09, a13, 4);
-        //     rot_exchange!(a10, a14, 4);
-        //     rot_exchange!(a11, a15, 4);
-
-        //     mask ^= mask >> 2;
-        //     rot_exchange!(a00, a02, 2);
-        //     rot_exchange!(a01, a03, 2);
-        //     rot_exchange!(a04, a06, 2);
-        //     rot_exchange!(a05, a07, 2);
-        //     rot_exchange!(a08, a10, 2);
-        //     rot_exchange!(a09, a11, 2);
-        //     rot_exchange!(a12, a14, 2);
-        //     rot_exchange!(a13, a15, 2);
-
-        //     mask ^= mask >> 1;
-        //     rot_exchange!(a00, a01, 1);
-        //     rot_exchange!(a02, a03, 1);
-        //     rot_exchange!(a04, a05, 1);
-        //     rot_exchange!(a06, a07, 1);
-        //     rot_exchange!(a08, a09, 1);
-        //     rot_exchange!(a10, a11, 1);
-        //     rot_exchange!(a12, a13, 1);
-        //     rot_exchange!(a14, a15, 1);
-
-        //     *a01 = a01.rotate_right(1);
-        //     *a02 = a02.rotate_right(2);
-        //     *a03 = a03.rotate_right(3);
-        //     *a04 = a04.rotate_right(4);
-        //     *a05 = a05.rotate_right(5);
-        //     *a06 = a06.rotate_right(6);
-        //     *a07 = a07.rotate_right(7);
-        //     *a08 = a08.rotate_right(8);
-        //     *a09 = a09.rotate_right(9);
-        //     *a10 = a10.rotate_right(10);
-        //     *a11 = a11.rotate_right(11);
-        //     *a12 = a12.rotate_right(12);
-        //     *a13 = a13.rotate_right(13);
-        //     *a14 = a14.rotate_right(14);
-        //     *a15 = a15.rotate_right(15);
     }
+}
+
+/// Moves the masked bits in `x` to the left by `shift` positions. For this function to work
+/// properly, the mask and the shifted mask should not overlap, ie. `mask & (mask << shift) == 0`
+/// and no bits should be shifted out, ie. `((mask << shift) >> shift) ==  mask`.  
+///
+/// ```text
+///   x <- abcd_efgh
+///   m <- 0001_0001
+///   s <- x.delta_swap(m, 3)
+///   s == dbca_hfge
+/// ```
+fn delta_swap(x: u64, m: u64, shift: u32) -> u64 {
+    let t = ((x >> shift) ^ x) & m;
+    (x ^ t) ^ (t << shift)
+}
+
+/// Moves the masked bits in `x` to the left by `shift` positions. This is a generalization of
+/// `delta_swap` to `u64` arrays. See `delta_swap` for more information.
+fn long_delta_swap<const N: usize>(x: [u64; N], m: [u64; N], shift: u32) -> [u64; N] {
+    let t = long_and(&long_xor(&long_shr(x, shift), &x), &m);
+    long_xor(&long_xor(&x, &t), &long_shl(t, shift))
+}
+
+/// Performs the `and` operation on two unsigned integers stored in `u64` arrays.
+fn long_and<const N: usize>(a: &[u64; N], b: &[u64; N]) -> [u64; N] {
+    let mut result = [0; N];
+    for i in 0..N {
+        result[i] = a[i] & b[i];
+    }
+    result
+}
+
+/// Performs the `xor` operation on two unsigned integers stored in `u64` arrays
+fn long_xor<const N: usize>(a: &[u64; N], b: &[u64; N]) -> [u64; N] {
+    let mut result = [0; N];
+    for i in 0..N {
+        result[i] = a[i] ^ b[i];
+    }
+    result
+}
+
+/// Multiplies two unsigned integers using the grade-school method. The arguments and
+/// the result are arrays of `u64`s, where the least significant word is at index 0.
+fn long_mul<const N: usize>(a: &[u64; N], b: &[u64; N]) -> [u64; N] {
+    let mut result = [0; N];
+    for i in 0..N {
+        let mut c: u64 = 0;
+        for j in 0..(N - i) {
+            let t = a[i] as u128 * b[j] as u128 + result[i + j] as u128 + c as u128;
+            result[i + j] = t as u64;
+            c = (t >> 64) as u64;
+        }
+    }
+    result
+}
+
+/// Performs the right shift operation. The least significant word is assumed to be at index 0.
+fn long_shr<const N: usize>(mut v: [u64; N], shift: u32) -> [u64; N] {
+    let delta = shift as usize / 64;
+    let shift = shift % 64;
+    let mask = !(!0 >> shift);
+    v[0] = v[delta] >> shift;
+    for i in 1..(N - delta) {
+        let mut t = v[i + delta].rotate_right(shift);
+        (t, v[i - 1]) = t.exchange(v[i - 1], mask);
+        v[i] = t;
+    }
+    for a in &mut v[(N - delta)..] {
+        *a = 0;
+    }
+    v
+}
+
+/// Performs the left shift operation. The least significant word is assumed to be at index 0.
+fn long_shl<const N: usize>(mut v: [u64; N], shift: u32) -> [u64; N] {
+    let delta = shift as usize / 64;
+    let shift = shift % 64;
+    let mask = !(!0 << shift);
+    v[N - 1] = v[N - 1 - delta] << shift;
+    for i in (delta..(N - 1)).rev() {
+        let mut t = v[i - delta].rotate_left(shift);
+        (t, v[i + 1]) = t.exchange(v[i + 1], mask);
+        v[i] = t;
+    }
+    for a in &mut v[..delta] {
+        *a = 0;
+    }
+    v
 }
 
 /// A helper method for shuffling bytes in an ´[u8; 32]´ array. The mapping is applied separately to
@@ -686,7 +667,6 @@ fn shuffle_bytes(data: &mut [u8; 32], mapping: &[u8; 32]) {
     *data = result;
 }
 
-#[rustfmt::skip]
 #[cfg(test)]
 mod tests {
     use core::array;
@@ -694,6 +674,438 @@ mod tests {
     use super::*;
     use crate::wyrand::WyRng;
 
+    #[test]
+    fn long_ops_256() {
+        let mut a: [u64; 4] = [
+            3411780966643309290,
+            18136081398534378773,
+            9219065852671733502,
+            8725777230731513545,
+        ];
+        let mut b: [u64; 4] = [
+            13226243723955440707,
+            2151928491308778980,
+            12605647679825650081,
+            324627457777546534,
+        ];
+
+        assert_eq!(
+            long_mul(&a, &b),
+            [
+                7663115068934357822,
+                11641022341552665496,
+                15601942919079094697,
+                5725101895204243413
+            ]
+        );
+
+        a = long_shl(a, 170);
+        b = long_shr(b, 19);
+
+        assert_eq!(a, [0, 0, 15738858040729796608, 15588177382644832736]);
+        assert_eq!(
+            &b,
+            &[
+                1206004764774689763,
+                9526278400645396304,
+                7396271637646597879,
+                619177737765
+            ]
+        );
+        let mut a: [u64; 4] = [
+            3767482649846035678,
+            8196783407023646100,
+            584292305772007898,
+            12702511834212947002,
+        ];
+        let mut b: [u64; 4] = [
+            8715585780955075423,
+            13132038111537412268,
+            9346838749455166110,
+            423783674454801745,
+        ];
+
+        assert_eq!(
+            long_mul(&a, &b),
+            [
+                15563909172995528802,
+                1628886569001990366,
+                6108754696538904360,
+                14693161311349477231
+            ]
+        );
+
+        a = long_shl(a, 52);
+        b = long_shr(b, 246);
+
+        assert_eq!(
+            a,
+            [
+                5611485135703638016,
+                6432060063453878355,
+                2136707391197595486,
+                4873037446303590541
+            ]
+        );
+        assert_eq!(b, [23, 0, 0, 0]);
+
+        let mut a: [u64; 4] = [
+            598365326611093333,
+            10338934721397851550,
+            15716960247935151312,
+            1479676015519540286,
+        ];
+        let mut b: [u64; 4] = [
+            12968446461158918448,
+            12780835236968280994,
+            9895886854841068309,
+            3372007258361930805,
+        ];
+
+        assert_eq!(
+            long_mul(&a, &b),
+            [
+                16413989336046165232,
+                6195171311622268739,
+                4132736093975731865,
+                8426831723610196255
+            ]
+        );
+
+        a = long_shl(a, 94);
+        b = long_shr(b, 94);
+
+        assert_eq!(
+            a,
+            [
+                0,
+                622664246315974656,
+                8662605058578543750,
+                12954335171722531222
+            ]
+        );
+        assert_eq!(
+            b,
+            [13909838412790798266, 8849169567253332647, 3140426481, 0]
+        );
+    }
+
+    #[test]
+    fn long_mul_1024() {
+        let mut a: [u64; 16] = [
+            6644251180660479427,
+            15375144009903779421,
+            11331245272523287800,
+            13303551853398386828,
+            17434003064827756660,
+            11296844175318992981,
+            5560957280063003477,
+            1930804660948188527,
+            9011616370765215235,
+            3955907964002714030,
+            10563655696236183650,
+            14782017524823165738,
+            356083664922244647,
+            14267588606385061924,
+            8257302408516677364,
+            613792976545283567,
+        ];
+        let mut b: [u64; 16] = [
+            6435477686572270493,
+            15322659430818327295,
+            1945775863637021984,
+            393356772086011205,
+            9301616734277197146,
+            1763018018437677469,
+            15661237430003529900,
+            18388969952484669357,
+            7139247846141788917,
+            14969267384589550089,
+            4746278236595994671,
+            14272572912459441903,
+            1754695267683551763,
+            2206528858639209206,
+            9859223317057709586,
+            16161135551658693928,
+        ];
+
+        assert_eq!(
+            long_mul(&a, &b),
+            [
+                6728071202426298775,
+                800901682447864017,
+                2446809230861829908,
+                18386674905398012292,
+                15738311996737897385,
+                14142983105005950648,
+                510995996386088842,
+                18269057886309408751,
+                3627382636336550314,
+                9623552145502661218,
+                3193369802868267560,
+                9299859282271574595,
+                17222133033300977738,
+                12002415550249873749,
+                6792208012154254790,
+                3890904784391795613
+            ]
+        );
+
+        a = long_shl(a, 856);
+        b = long_shr(b, 887);
+
+        assert_eq!(
+            a,
+            [
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                4538991625744941056,
+                295208076076397855,
+                9958465022408875900
+            ]
+        );
+        assert_eq!(
+            b,
+            [
+                11961206210839716925,
+                10360057427372167441,
+                448,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0
+            ]
+        );
+
+        let mut a: [u64; 16] = [
+            4129621589208185374,
+            10282645349545992521,
+            8138323506775935308,
+            12560927580787899729,
+            4232648962313989009,
+            3568654794918009891,
+            4741658618461894646,
+            16756237985131987877,
+            17405225263068866572,
+            17803728918210971903,
+            14422562067456280936,
+            17686801495406915711,
+            16991513979673859564,
+            14294337257237172282,
+            1760000570133965158,
+            10390822289827181767,
+        ];
+        let mut b: [u64; 16] = [
+            5620743761134239871,
+            13378778125014143077,
+            10657548045285664511,
+            7172912901277174850,
+            1888702459779789059,
+            5880811507705288644,
+            14112087999037257161,
+            7694725826617954742,
+            10355822629999972552,
+            11740637184166906850,
+            8092155905662476753,
+            14656352361262531110,
+            8143177533160265646,
+            6543593581502180789,
+            3853584917579324944,
+            14100675213984029125,
+        ];
+
+        assert_eq!(
+            long_mul(&a, &b),
+            [
+                13501817612426728674,
+                8899611418571476318,
+                8364890198696805470,
+                4795978311326914456,
+                12862561002109506846,
+                16615116899367206053,
+                1526892800474043703,
+                4798914603494840412,
+                15996273591059184135,
+                13463544011154614465,
+                7177511043023512041,
+                2265618949848185506,
+                4595966079890399157,
+                14704864079719082982,
+                10076509859502337707,
+                16485883865638316824
+            ]
+        );
+
+        a = long_shl(a, 164);
+        b = long_shr(b, 458);
+
+        assert_eq!(
+            a,
+            [
+                0,
+                0,
+                10996560898599944192,
+                3471734986841116490,
+                9904705071155033971,
+                7228230221966746053,
+                1903537317681172824,
+                1247992098940402916,
+                17974850601353644558,
+                13488345016910485057,
+                1008384991121496756,
+                8433148628045693583,
+                15858465730702397943,
+                12194349197137525908,
+                12156727013771723781,
+                6056501122911158024
+            ]
+        );
+        assert_eq!(
+            b,
+            [
+                3610394082586453396,
+                17916425226462201444,
+                8388160772909285554,
+                9915821676216714712,
+                16983876240034824368,
+                7880244470453353829,
+                9517992641113423275,
+                8164285791316412311,
+                13770190638656278,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0
+            ]
+        );
+        let mut a: [u64; 16] = [
+            5409040664802577928,
+            4337689103478077781,
+            16572597422271931629,
+            15369599225302760991,
+            11559187944828407506,
+            15033416988803371293,
+            13765855692493603883,
+            9662387262921880977,
+            14351159509606292376,
+            15998888353016910707,
+            2860074819173280356,
+            2284715345801021135,
+            7753044493140388060,
+            3385700548584035278,
+            17960670407846100523,
+            9199163298471302427,
+        ];
+        let mut b: [u64; 16] = [
+            16417971319772498526,
+            2422929543108770505,
+            9743954572451819187,
+            13805321096598699655,
+            10947986539340510467,
+            15630727282541713814,
+            8347422254267615416,
+            9049332421657438551,
+            15600012390401415886,
+            10104349279631261589,
+            182793590123344121,
+            8186085328265164590,
+            17727725571624441461,
+            4033849156266580122,
+            17471063214030402589,
+            6727386048098136304,
+        ];
+
+        assert_eq!(
+            long_mul(&a, &b),
+            [
+                2810647460032870128,
+                1294832851195895176,
+                17988804482227675645,
+                10238243024103904741,
+                11344647340393550453,
+                16322344134089412857,
+                15091863005503959096,
+                17641855065955955360,
+                2359357080642552055,
+                2764074877833358885,
+                1959615557669726182,
+                17529415291297684265,
+                15234545123731262587,
+                10844187904060412016,
+                2967559009752448786,
+                2511775429903223195
+            ]
+        );
+
+        a = long_shl(a, 727);
+        b = long_shr(b, 163);
+
+        assert_eq!(
+            a,
+            [
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                16844757448878194688,
+                11598865107641534562,
+                14297813166776523080,
+                9811695553521843928,
+                1776596142674060772
+            ]
+        );
+        assert_eq!(
+            b,
+            [
+                10997535001224359777,
+                1541575364977019724,
+                13771157956298924536,
+                718879493176782836,
+                10081911582142169098,
+                13524929091776722428,
+                5718630287815986195,
+                12092347652394924932,
+                9189884098470030649,
+                7748745312762812967,
+                17192750045913461007,
+                12544115421483066253,
+                17724442029432157677,
+                195792702,
+                0,
+                0
+            ]
+        );
+    }
     #[test]
     fn matmul_8x8() {
         let iters = 1000;
@@ -706,7 +1118,7 @@ mod tests {
 
             let a_x_i = a.matmul(&identity);
             let i_x_a = identity.matmul(&a);
-            
+
             assert_eq!(a_x_i, a);
             assert_eq!(i_x_a, a);
 
@@ -715,7 +1127,8 @@ mod tests {
             let mut expected = [0; 8];
             for (i, row) in a.iter().enumerate() {
                 for (j, col) in b_t.iter().enumerate() {
-                    expected[i] |= (0..8).fold(0, |acc, k| acc ^ ((row >> k) & (col >> k) & 1)) << j;
+                    expected[i] |=
+                        (0..8).fold(0, |acc, k| acc ^ ((row >> k) & (col >> k) & 1)) << j;
                 }
             }
             assert_eq!(a_x_b, expected);
@@ -726,15 +1139,15 @@ mod tests {
     fn matmul_16x16() {
         let iters = 1000;
         let mut rng: WyRng = Default::default();
-        
+
         let identity = <[u16; 16]>::IDENTITY;
         for _ in 0..iters {
             let a: [u16; 16] = array::from_fn(|_| rng.u16());
             let b: [u16; 16] = array::from_fn(|_| rng.u16());
-            
+
             let a_x_i = a.matmul(&identity);
             let i_x_a = identity.matmul(&a);
-            
+
             assert_eq!(a_x_i, a);
             assert_eq!(i_x_a, a);
 
@@ -743,13 +1156,15 @@ mod tests {
             let mut expected = [0; 16];
             for (i, row) in a.iter().enumerate() {
                 for (j, col) in b_t.iter().enumerate() {
-                    expected[i] |= (0..16).fold(0, |acc, k| acc ^ ((row >> k) & (col >> k) & 1)) << j;
+                    expected[i] |=
+                        (0..16).fold(0, |acc, k| acc ^ ((row >> k) & (col >> k) & 1)) << j;
                 }
             }
             assert_eq!(a_x_b, expected);
         }
     }
 
+    #[rustfmt::skip]
     #[test]
     fn transpose_8x8() {
         let mut matrix = [
@@ -790,6 +1205,7 @@ mod tests {
         }
     }
 
+    #[rustfmt::skip]
     #[test]
     fn transpose_16x16() {
 
@@ -847,6 +1263,7 @@ mod tests {
         }
     }
 
+    #[rustfmt::skip]
     #[test]
     fn sort_row_bits_u8() {
         let mut matrix = [
