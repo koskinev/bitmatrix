@@ -52,8 +52,8 @@ pub(crate) const fn transpose_mask<const N: usize>(block: usize) -> [u64; N] {
     while i < 64 * N {
         let col = i % size;
         let row = i / size;
-        let bit = ((col % (2 * block) >= block) & (row % (2 * block) < block)) as u64;
-        mask[i / 64] |= bit << (i % 64);
+        let bit = (col % (2 * block) >= block) & (row % (2 * block) < block);
+        mask[i / 64] |= (bit as u64) << (i % 64);
         i += 1;
     }
     mask
