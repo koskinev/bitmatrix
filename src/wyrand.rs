@@ -184,7 +184,7 @@ impl WyRng {
 
     /// Returns a `u64`.
     pub fn u64(&mut self) -> u64 {
-        self.state = self.state.wrapping_add(0x_a076_1d64_78bd_642f);
+        self.state = self.state.wrapping_add(0x_A076_1D64_78BD_642F);
         Self::wyhash(self.state)
     }
 
@@ -206,7 +206,7 @@ impl WyRng {
     /// Returns a `u64` using `x` as the seed for the wyrand algorithm.
     fn wyhash(x: u64) -> u64 {
         let mut a = x;
-        let mut b = x ^ 0x_e703_7ed1_a0b4_28db;
+        let mut b = x ^ 0x_E703_7ED1_A0B4_28DB;
         let r = (a as u128) * (b as u128);
         a = r as u64;
         b = (r >> 64) as u64;
