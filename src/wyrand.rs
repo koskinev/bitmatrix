@@ -303,3 +303,23 @@ impl PRng<usize> for WyRng {
         self.bounded_usize(low, high)
     }
 }
+
+impl<T, const N: usize> PRng<[T; N]> for WyRng
+where
+    WyRng: PRng<T>,
+    T: Copy,
+{
+    fn next(&mut self) -> [T; N] {
+        let mut result = core::array::from_fn(|_| self.next());
+        self.shuffle(&mut result);
+        result
+    }
+
+    fn next_bounded(&mut self, low: [T; N], high: [T; N]) -> [T; N] {
+        let mut result = [low[0]; N];
+        for i in 0..N {
+            result[i] = self.next_bounded(low[i], high[i]);
+        }
+        result
+    }
+}
