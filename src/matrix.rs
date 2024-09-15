@@ -3,7 +3,7 @@ mod tests;
 
 mod utils;
 
-use utils::{delta_swap, w_and, w_delta_swap, w_mul, w_mul_n1, w_shr, w_xor};
+use utils::{delta_swap, w_and, w_delta_swap, w_mul_n1, w_shr, w_xor};
 
 /// A trait for bit matrices.
 pub trait BitMatrix {
@@ -433,7 +433,7 @@ impl BitMatrix for [u16; 16] {
             // this >>= 1; other >>= 16;
             (this, other) = (w_shr(this, 1), w_shr(other, Self::SIZE as u32));
 
-            // temp ^= (COL & this) * (ROW & other);
+            // result ^= (COL & this) * (ROW & other);
             result = w_xor(result, w_mul_n1(w_and(COL, this), w_and(ROW, other)));
         }
 
@@ -539,7 +539,7 @@ impl BitMatrix for [u32; 32] {
             // this >>= 1; other >>= 16;
             (this, other) = (w_shr(this, 1), w_shr(other, Self::SIZE as u32));
 
-            // temp ^= (COL & this) * (ROW & other);
+            // result ^= (COL & this) * (ROW & other);
             result = w_xor(result, w_mul_n1(w_and(COL, this), w_and(ROW, other)));
         }
 
@@ -614,5 +614,251 @@ impl BitMatrix for [u32; 32] {
         x = w_delta_swap(x, MASK4, 496);
 
         unsafe { ptr.write_unaligned(x) };
+    }
+}
+
+impl BitMatrix for [u64; 64] {
+    type RowRepr = u64;
+
+    const IDENTITY: Self = [
+        0x1,
+        0x2,
+        0x4,
+        0x8,
+        0x10,
+        0x20,
+        0x40,
+        0x80,
+        0x100,
+        0x200,
+        0x400,
+        0x800,
+        0x1000,
+        0x2000,
+        0x4000,
+        0x8000,
+        0x10000,
+        0x20000,
+        0x40000,
+        0x80000,
+        0x100000,
+        0x200000,
+        0x400000,
+        0x800000,
+        0x1000000,
+        0x2000000,
+        0x4000000,
+        0x8000000,
+        0x10000000,
+        0x20000000,
+        0x40000000,
+        0x80000000,
+        0x100000000,
+        0x200000000,
+        0x400000000,
+        0x800000000,
+        0x1000000000,
+        0x2000000000,
+        0x4000000000,
+        0x8000000000,
+        0x10000000000,
+        0x20000000000,
+        0x40000000000,
+        0x80000000000,
+        0x100000000000,
+        0x200000000000,
+        0x400000000000,
+        0x800000000000,
+        0x1000000000000,
+        0x2000000000000,
+        0x4000000000000,
+        0x8000000000000,
+        0x10000000000000,
+        0x20000000000000,
+        0x40000000000000,
+        0x80000000000000,
+        0x100000000000000,
+        0x200000000000000,
+        0x400000000000000,
+        0x800000000000000,
+        0x1000000000000000,
+        0x2000000000000000,
+        0x4000000000000000,
+        0x8000000000000000,
+    ];
+    const SIZE: usize = 64;
+    const ZERO: Self = [0; 64];
+
+    fn count_ones(&self) -> u32 {
+        self.iter().fold(0, |acc, row| acc + row.count_ones())
+    }
+
+    fn count_zeros(&self) -> u32 {
+        self.iter().fold(0, |acc, row| acc + row.count_zeros())
+    }
+
+    fn get(&self, row: usize, col: usize) -> u8 {
+        ((self[row] >> col) & 1) as u8
+    }
+
+    fn matmul(mut self, mut rhs: Self) -> Self {
+        type BV = [u64; 64];
+        const COL: [u64; 64] = [0x1; 64];
+        const ROW: [u64; 64] = {
+            let mut row = [0; 64];
+            row[0] = u64::MAX;
+            row
+        };
+
+        let mut result: BV = w_mul_n1(w_and(COL, self), w_and(ROW, rhs));
+        for _ in 0..Self::SIZE - 1 {
+            // self >>= 1; rhs >>= 64;
+            (self, rhs) = (w_shr(self, 1), w_shr(rhs, Self::SIZE as u32));
+
+            // result ^= (COL & self) * (ROW & rhs);
+            result = w_xor(result, w_mul_n1(w_and(COL, self), w_and(ROW, rhs)));
+        }
+        result
+    }
+
+    fn reverse_rows(&mut self) {
+        self.reverse();
+    }
+
+    fn reverse_columns(&mut self) {
+        for row in self.iter_mut() {
+            *row = row.reverse_bits();
+        }
+    }
+
+    fn sort_rows(&mut self) {
+        for row in self.iter_mut() {
+            let shift = row.count_zeros();
+            let (x, overflow) = Self::RowRepr::MAX.overflowing_shl(shift);
+            *row = x * (!overflow as Self::RowRepr);
+        }
+    }
+
+    fn sort_columns(&mut self) {
+        let mut mask = 0;
+        let mut unsorted = 0;
+        let mut temp = *self;
+        for row in &*self {
+            mask |= *row;
+            unsorted |= *row ^ mask;
+        }
+        while unsorted > 0 {
+            mask = 1 << unsorted.trailing_zeros();
+            if let Some(l) = temp.iter().position(|row| row & mask != 0) {
+                if let Some(x) = temp[l..].iter().rposition(|row| row & mask == 0) {
+                    let r = x + l + 1;
+                    temp[l..r].sort_unstable_by_key(|row| row & mask);
+                }
+            }
+            for (row, bits) in self.iter_mut().zip(temp.iter()) {
+                *row &= !(mask);
+                *row |= bits & mask;
+            }
+            unsorted &= !mask;
+        }
+    }
+
+    fn transpose(&mut self) {
+        const F8: u64 = 0xFFFFFFFF00000000;
+        const F4: u64 = 0xFFFF0000FFFF0000;
+        const F2: u64 = 0xFF00FF00FF00FF00;
+        const F1: u64 = 0xF0F0F0F0F0F0F0F0;
+        const CC: u64 = 0xCCCCCCCCCCCCCCCC;
+        const AA: u64 = 0xAAAAAAAAAAAAAAAA;
+
+        const MASK5: [u64; 64] = {
+            let mut mask = [0; 64];
+            let mut i = 0;
+            loop {
+                mask[i] = F8;
+                i += 1;
+                if i == 32 {
+                    break;
+                }
+            }
+            mask
+        };
+        const MASK4: [u64; 64] = {
+            let mut mask = [0; 64];
+            let mut i = 0;
+            loop {
+                if (i / 16) % 2 == 0 {
+                    mask[i] = F4;
+                } 
+                i += 1;
+                if i == 64 {
+                    break;
+                }
+            }
+            mask
+        };
+        const MASK3: [u64; 64] = {
+            let mut mask = [0; 64];
+            let mut i = 0;
+            loop {
+                if (i / 8) % 2 == 0 {
+                    mask[i] = F2;
+                } 
+                i += 1;
+                if i == 64 {
+                    break;
+                }
+            }
+            mask
+        };
+        const MASK2: [u64; 64] = {
+            let mut mask = [0; 64];
+            let mut i = 0;
+            loop {
+                if (i / 4) % 2 == 0 {
+                    mask[i] = F1;
+                } 
+                i += 1;
+                if i == 64 {
+                    break;
+                }
+            }
+            mask
+        };
+        const MASK1: [u64; 64] = {
+            let mut mask = [0; 64];
+            let mut i = 0;
+            loop {
+                if (i / 2) % 2 == 0 {
+                    mask[i] = CC;
+                } 
+                i += 1;
+                if i == 64 {
+                    break;
+                }
+            }
+            mask
+        };
+        const MASK0: [u64; 64] = {
+            let mut mask = [0; 64];
+            let mut i = 0;
+            loop {
+                if i % 2 == 0 {
+                    mask[i] = AA;
+                } 
+                i += 1;
+                if i == 64 {
+                    break;
+                }
+            }
+            mask
+        };
+
+        *self = w_delta_swap(*self, MASK0, 63);
+        *self = w_delta_swap(*self, MASK1, 126);
+        *self = w_delta_swap(*self, MASK2, 252);
+        *self = w_delta_swap(*self, MASK3, 504);
+        *self = w_delta_swap(*self, MASK4, 1008);
+        *self = w_delta_swap(*self, MASK5, 2016);
     }
 }
