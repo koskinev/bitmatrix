@@ -3,7 +3,7 @@ mod tests;
 
 mod utils;
 
-use utils::{delta_swap, w_and, w_delta_swap, w_mul_n1, w_shr, w_xor};
+use utils::{delta_swap, transpose_mask, w_and, w_delta_swap, w_mul_n1, w_shr, w_xor};
 
 /// A trait for bit matrices.
 pub trait BitMatrix {
@@ -485,10 +485,10 @@ impl BitMatrix for [u16; 16] {
 
     fn transpose(&mut self) {
         type BV = [u64; 4];
-        const MASK0: BV = [0xAAAA0000AAAA; 4];
-        const MASK1: BV = [0xCCCCCCCC; 4];
-        const MASK2: BV = [0xF0F0F0F0F0F0F0F0, 0, 0xF0F0F0F0F0F0F0F0, 0];
-        const MASK3: BV = [0xFF00FF00FF00FF00, 0xFF00FF00FF00FF00, 0, 0];
+        const MASK0: BV = transpose_mask(1);
+        const MASK1: BV = transpose_mask(2);
+        const MASK2: BV = transpose_mask(4);
+        const MASK3: BV = transpose_mask(8);
 
         let ptr: *mut BV = self.as_mut_ptr().cast();
         let mut x = unsafe { ptr.read_unaligned() };
@@ -592,17 +592,11 @@ impl BitMatrix for [u32; 32] {
     fn transpose(&mut self) {
         type BV = [u64; 16];
 
-        const AA: u64 = 0xAAAAAAAA;
-        const CC: u64 = 0xCCCCCCCCCCCCCCCC;
-        const F1: u64 = 0xF0F0F0F0F0F0F0F0;
-        const F2: u64 = 0xFF00FF00FF00FF00;
-        const F4: u64 = 0xFFFF0000FFFF0000;
-
-        const MASK0: [u64; 16] = [AA; 16];
-        const MASK1: [u64; 16] = [CC, 0, CC, 0, CC, 0, CC, 0, CC, 0, CC, 0, CC, 0, CC, 0];
-        const MASK2: [u64; 16] = [F1, F1, 0, 0, F1, F1, 0, 0, F1, F1, 0, 0, F1, F1, 0, 0];
-        const MASK3: [u64; 16] = [F2, F2, F2, F2, 0, 0, 0, 0, F2, F2, F2, F2, 0, 0, 0, 0];
-        const MASK4: [u64; 16] = [F4, F4, F4, F4, F4, F4, F4, F4, 0, 0, 0, 0, 0, 0, 0, 0];
+        const MASK0: BV = transpose_mask(1);
+        const MASK1: BV = transpose_mask(2);
+        const MASK2: BV = transpose_mask(4);
+        const MASK3: BV = transpose_mask(8);
+        const MASK4: BV = transpose_mask(16);
 
         let ptr: *mut BV = self.as_mut_ptr().cast();
         let mut x = unsafe { ptr.read_unaligned() };
@@ -764,95 +758,14 @@ impl BitMatrix for [u64; 64] {
     }
 
     fn transpose(&mut self) {
-        const F8: u64 = 0xFFFFFFFF00000000;
-        const F4: u64 = 0xFFFF0000FFFF0000;
-        const F2: u64 = 0xFF00FF00FF00FF00;
-        const F1: u64 = 0xF0F0F0F0F0F0F0F0;
-        const CC: u64 = 0xCCCCCCCCCCCCCCCC;
-        const AA: u64 = 0xAAAAAAAAAAAAAAAA;
+        type BV = [u64; 64];
 
-        const MASK5: [u64; 64] = {
-            let mut mask = [0; 64];
-            let mut i = 0;
-            loop {
-                mask[i] = F8;
-                i += 1;
-                if i == 32 {
-                    break;
-                }
-            }
-            mask
-        };
-        const MASK4: [u64; 64] = {
-            let mut mask = [0; 64];
-            let mut i = 0;
-            loop {
-                if (i / 16) % 2 == 0 {
-                    mask[i] = F4;
-                } 
-                i += 1;
-                if i == 64 {
-                    break;
-                }
-            }
-            mask
-        };
-        const MASK3: [u64; 64] = {
-            let mut mask = [0; 64];
-            let mut i = 0;
-            loop {
-                if (i / 8) % 2 == 0 {
-                    mask[i] = F2;
-                } 
-                i += 1;
-                if i == 64 {
-                    break;
-                }
-            }
-            mask
-        };
-        const MASK2: [u64; 64] = {
-            let mut mask = [0; 64];
-            let mut i = 0;
-            loop {
-                if (i / 4) % 2 == 0 {
-                    mask[i] = F1;
-                } 
-                i += 1;
-                if i == 64 {
-                    break;
-                }
-            }
-            mask
-        };
-        const MASK1: [u64; 64] = {
-            let mut mask = [0; 64];
-            let mut i = 0;
-            loop {
-                if (i / 2) % 2 == 0 {
-                    mask[i] = CC;
-                } 
-                i += 1;
-                if i == 64 {
-                    break;
-                }
-            }
-            mask
-        };
-        const MASK0: [u64; 64] = {
-            let mut mask = [0; 64];
-            let mut i = 0;
-            loop {
-                if i % 2 == 0 {
-                    mask[i] = AA;
-                } 
-                i += 1;
-                if i == 64 {
-                    break;
-                }
-            }
-            mask
-        };
+        const MASK0: BV = transpose_mask(1);
+        const MASK1: BV = transpose_mask(2);
+        const MASK2: BV = transpose_mask(4);
+        const MASK3: BV = transpose_mask(8);
+        const MASK4: BV = transpose_mask(16);
+        const MASK5: BV = transpose_mask(32);
 
         *self = w_delta_swap(*self, MASK0, 63);
         *self = w_delta_swap(*self, MASK1, 126);

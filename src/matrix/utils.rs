@@ -1,3 +1,18 @@
+/// Moves the masked bits in `x` to the left by `shift` positions. For this function to work
+/// properly, the mask and the shifted mask should not overlap, ie. `mask & (mask << shift) == 0`
+/// and no bits should be shifted out, ie. `((mask << shift) >> shift) ==  mask`.  
+///
+/// ```text
+///   x <- abcd_efgh
+///   m <- 0001_0001
+///   s <- x.delta_swap(m, 3)
+///   s == dbca_hfge
+/// ```
+pub(crate) fn delta_swap(x: u64, m: u64, shift: u32) -> u64 {
+    let t = ((x >> shift) ^ x) & m;
+    (x ^ t) ^ (t << shift)
+}
+
 /// Exchanges the masked bits of `x` with the corresponding bits in `y`, and returns the
 /// result.
 ///
@@ -16,19 +31,32 @@ pub(crate) fn exchange(mut x: u64, mut y: u64, mask: u64) -> (u64, u64) {
     (x, y)
 }
 
-/// Moves the masked bits in `x` to the left by `shift` positions. For this function to work
-/// properly, the mask and the shifted mask should not overlap, ie. `mask & (mask << shift) == 0`
-/// and no bits should be shifted out, ie. `((mask << shift) >> shift) ==  mask`.  
-///
-/// ```text
-///   x <- abcd_efgh
-///   m <- 0001_0001
-///   s <- x.delta_swap(m, 3)
-///   s == dbca_hfge
-/// ```
-pub(crate) fn delta_swap(x: u64, m: u64, shift: u32) -> u64 {
-    let t = ((x >> shift) ^ x) & m;
-    (x ^ t) ^ (t << shift)
+/// Computes the integer square root of `n` using Newton's method.
+const fn isqrt(n: usize) -> usize {
+    let mut x = n;
+    let mut y = (x + 1) / 2;
+    while y < x {
+        x = y;
+        y = (x + n / x) / 2;
+    }
+    x
+}
+
+/// Constructs a mask for the `transpose` operation. The mask can be thought of as a bit matrix
+/// where the set bits mask a block that is exchanged with the block mirrored along the diagonal.
+/// See the comments of `BitMatrix::transpose` implementation for `[u8; 8]` for an example.
+pub(crate) const fn transpose_mask<const N: usize>(block: usize) -> [u64; N] {
+    let size = isqrt(64 * N);
+    let mut mask = [0; N];
+    let mut i = 0;
+    while i < 64 * N {
+        let col = i % size;
+        let row = i / size;
+        let bit = ((col % (2 * block) >= block) & (row % (2 * block) < block)) as u64;
+        mask[i / 64] |= bit << (i % 64);
+        i += 1;
+    }
+    mask
 }
 
 /// Moves the masked bits in `x` to the left by `shift` positions. This is a generalization of
