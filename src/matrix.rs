@@ -3,7 +3,7 @@ mod tests;
 
 mod utils;
 
-use utils::{delta_swap, transpose_mask, w_and, w_delta_swap, w_mul_n1, w_shr, w_xor};
+use utils::{delta_swap, row_sum_index, stripe_index, transpose_mask, wide_delta_swap};
 
 /// A trait for bit matrices.
 pub trait BitMatrix {
@@ -419,26 +419,34 @@ impl BitMatrix for [u16; 16] {
         ((self[row] >> col) & 1) as u8
     }
 
-    fn matmul(mut self, rhs: Self) -> Self {
-        type BV = [u64; 4];
-        const COL: [u64; 4] = [0x1000100010001; 4];
-        const ROW: [u64; 4] = [0xFFFF, 0x0, 0x0, 0x0];
+    fn matmul(self, rhs: Self) -> Self {
+        const STRIPE_BITS: usize = 4;
+        const SUM_TABLE_LEN: usize = 1 << STRIPE_BITS;
+        const STRIPE_INDEX: [usize; SUM_TABLE_LEN] = stripe_index();
+        const ROW_SUM_INDEX: [usize; SUM_TABLE_LEN] = row_sum_index();
 
-        let ptr: *mut BV = self.as_mut_ptr().cast();
-        let mut this = unsafe { ptr.cast::<BV>().read_unaligned() };
-        let mut other = unsafe { rhs.as_ptr().cast::<BV>().read_unaligned() };
-        let mut result: BV = w_mul_n1(w_and(COL, this), w_and(ROW, other));
+        let mut sums = [0; SUM_TABLE_LEN];
+        let mut result = [0; Self::SIZE];
+        let mut mask = (1 << STRIPE_BITS) - 1;
+        let mut shift = 0;
+        while mask != 0 {
+            let range = shift..(shift + STRIPE_BITS).min(Self::SIZE);
+            let stripe = &rhs[range];
+            sums[0] = 0;
+            for i in 1..SUM_TABLE_LEN {
+                let j = STRIPE_INDEX[i];
+                sums[i] = sums[i - 1] ^ stripe[j];
+            }
 
-        for _ in 0..Self::SIZE - 1 {
-            // this >>= 1; other >>= 16;
-            (this, other) = (w_shr(this, 1), w_shr(other, Self::SIZE as u32));
-
-            // result ^= (COL & this) * (ROW & other);
-            result = w_xor(result, w_mul_n1(w_and(COL, this), w_and(ROW, other)));
+            for (i, row) in self.iter().enumerate() {
+                let prefix = ((row & mask) >> shift) as usize;
+                let j = ROW_SUM_INDEX[prefix];
+                result[i] ^= sums[j];
+            }
+            mask <<= STRIPE_BITS;
+            shift += STRIPE_BITS;
         }
-
-        unsafe { ptr.write_unaligned(result) }
-        self
+        result
     }
 
     fn reverse_rows(&mut self) {
@@ -493,10 +501,10 @@ impl BitMatrix for [u16; 16] {
         let ptr: *mut BV = self.as_mut_ptr().cast();
         let mut x = unsafe { ptr.read_unaligned() };
 
-        x = w_delta_swap(x, MASK0, 15);
-        x = w_delta_swap(x, MASK1, 30);
-        x = w_delta_swap(x, MASK2, 60);
-        x = w_delta_swap(x, MASK3, 120);
+        x = wide_delta_swap(x, MASK0, 15);
+        x = wide_delta_swap(x, MASK1, 30);
+        x = wide_delta_swap(x, MASK2, 60);
+        x = wide_delta_swap(x, MASK3, 120);
 
         unsafe { ptr.write_unaligned(x) };
     }
@@ -525,26 +533,34 @@ impl BitMatrix for [u32; 32] {
         ((self[row] >> col) & 1) as u8
     }
 
-    fn matmul(mut self, rhs: Self) -> Self {
-        type BV = [u64; 16];
-        const COL: BV = [0x100000001; 16];
-        const ROW: BV = [0xFFFFFFFF, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+    fn matmul(self, rhs: Self) -> Self {
+        const STRIPE_BITS: usize = 4;
+        const SUM_TABLE_LEN: usize = 1 << STRIPE_BITS;
+        const STRIPE_INDEX: [usize; SUM_TABLE_LEN] = stripe_index();
+        const ROW_SUM_INDEX: [usize; SUM_TABLE_LEN] = row_sum_index();
 
-        let ptr: *mut BV = self.as_mut_ptr().cast();
-        let mut this = unsafe { ptr.cast::<BV>().read_unaligned() };
-        let mut other = unsafe { rhs.as_ptr().cast::<BV>().read_unaligned() };
-        let mut result: BV = w_mul_n1(w_and(COL, this), w_and(ROW, other));
+        let mut sums = [0; SUM_TABLE_LEN];
+        let mut result = [0; Self::SIZE];
+        let mut mask = (1 << STRIPE_BITS) - 1;
+        let mut shift = 0;
+        while mask != 0 {
+            let range = shift..(shift + STRIPE_BITS).min(Self::SIZE);
+            let stripe = &rhs[range];
+            sums[0] = 0;
+            for i in 1..SUM_TABLE_LEN {
+                let j = STRIPE_INDEX[i];
+                sums[i] = sums[i - 1] ^ stripe[j];
+            }
 
-        for _ in 0..Self::SIZE - 1 {
-            // this >>= 1; other >>= 16;
-            (this, other) = (w_shr(this, 1), w_shr(other, Self::SIZE as u32));
-
-            // result ^= (COL & this) * (ROW & other);
-            result = w_xor(result, w_mul_n1(w_and(COL, this), w_and(ROW, other)));
+            for (i, row) in self.iter().enumerate() {
+                let prefix = ((row & mask) >> shift) as usize;
+                let j = ROW_SUM_INDEX[prefix];
+                result[i] ^= sums[j];
+            }
+            mask <<= STRIPE_BITS;
+            shift += STRIPE_BITS;
         }
-
-        unsafe { ptr.write_unaligned(result) }
-        self
+        result
     }
 
     fn reverse_rows(&mut self) {
@@ -601,11 +617,11 @@ impl BitMatrix for [u32; 32] {
         let ptr: *mut BV = self.as_mut_ptr().cast();
         let mut x = unsafe { ptr.read_unaligned() };
 
-        x = w_delta_swap(x, MASK0, 31);
-        x = w_delta_swap(x, MASK1, 62);
-        x = w_delta_swap(x, MASK2, 124);
-        x = w_delta_swap(x, MASK3, 248);
-        x = w_delta_swap(x, MASK4, 496);
+        x = wide_delta_swap(x, MASK0, 31);
+        x = wide_delta_swap(x, MASK1, 62);
+        x = wide_delta_swap(x, MASK2, 124);
+        x = wide_delta_swap(x, MASK3, 248);
+        x = wide_delta_swap(x, MASK4, 496);
 
         unsafe { ptr.write_unaligned(x) };
     }
@@ -695,22 +711,32 @@ impl BitMatrix for [u64; 64] {
         ((self[row] >> col) & 1) as u8
     }
 
-    fn matmul(mut self, mut rhs: Self) -> Self {
-        type BV = [u64; 64];
-        const COL: [u64; 64] = [0x1; 64];
-        const ROW: [u64; 64] = {
-            let mut row = [0; 64];
-            row[0] = u64::MAX;
-            row
-        };
+    fn matmul(self, rhs: Self) -> Self {
+        const STRIPE_BITS: usize = 4;
+        const SUM_TABLE_LEN: usize = 1 << STRIPE_BITS;
+        const STRIPE_INDEX: [usize; SUM_TABLE_LEN] = stripe_index();
+        const ROW_SUM_INDEX: [usize; SUM_TABLE_LEN] = row_sum_index();
 
-        let mut result: BV = w_mul_n1(w_and(COL, self), w_and(ROW, rhs));
-        for _ in 0..Self::SIZE - 1 {
-            // self >>= 1; rhs >>= 64;
-            (self, rhs) = (w_shr(self, 1), w_shr(rhs, Self::SIZE as u32));
+        let mut sums = [0; SUM_TABLE_LEN];
+        let mut result = [0; Self::SIZE];
+        let mut mask = (1 << STRIPE_BITS) - 1;
+        let mut shift = 0;
+        while mask != 0 {
+            let range = shift..(shift + STRIPE_BITS).min(Self::SIZE);
+            let stripe = &rhs[range];
+            sums[0] = 0;
+            for i in 1..SUM_TABLE_LEN {
+                let j = STRIPE_INDEX[i];
+                sums[i] = sums[i - 1] ^ stripe[j];
+            }
 
-            // result ^= (COL & self) * (ROW & rhs);
-            result = w_xor(result, w_mul_n1(w_and(COL, self), w_and(ROW, rhs)));
+            for (i, row) in self.iter().enumerate() {
+                let prefix = ((row & mask) >> shift) as usize;
+                let j = ROW_SUM_INDEX[prefix];
+                result[i] ^= sums[j];
+            }
+            mask <<= STRIPE_BITS;
+            shift += STRIPE_BITS;
         }
         result
     }
@@ -767,11 +793,11 @@ impl BitMatrix for [u64; 64] {
         const MASK4: BV = transpose_mask(16);
         const MASK5: BV = transpose_mask(32);
 
-        *self = w_delta_swap(*self, MASK0, 63);
-        *self = w_delta_swap(*self, MASK1, 126);
-        *self = w_delta_swap(*self, MASK2, 252);
-        *self = w_delta_swap(*self, MASK3, 504);
-        *self = w_delta_swap(*self, MASK4, 1008);
-        *self = w_delta_swap(*self, MASK5, 2016);
+        *self = wide_delta_swap(*self, MASK0, 63);
+        *self = wide_delta_swap(*self, MASK1, 126);
+        *self = wide_delta_swap(*self, MASK2, 252);
+        *self = wide_delta_swap(*self, MASK3, 504);
+        *self = wide_delta_swap(*self, MASK4, 1008);
+        *self = wide_delta_swap(*self, MASK5, 2016);
     }
 }
