@@ -1,4 +1,4 @@
-use utils::{w_and, w_mul, w_shl, w_shr, w_xor};
+use utils::{wide_and, wide_mul, wide_shl, wide_shr, wide_xor};
 
 use super::*;
 use crate::wyrand::{PRng, WyRng};
@@ -159,11 +159,11 @@ fn wide_ops() {
         let v_shl = bv_shl(&bv_b, shl);
         let v_mul = bv_mul(&bv_a, &bv_b);
 
-        let w_and = w_and(a, b);
-        let w_xor = w_xor(a, b);
-        let w_shr = w_shr(a, shr);
-        let w_shl = w_shl(b, shl);
-        let w_mul = w_mul(a, b);
+        let w_and = wide_and(a, b);
+        let w_xor = wide_xor(a, b);
+        let w_shr = wide_shr(a, shr);
+        let w_shl = wide_shl(b, shl);
+        let w_mul = wide_mul(a, b);
 
         assert_eq!(w_and, bv_to_u64s(v_and));
         assert_eq!(w_xor, bv_to_u64s(v_xor));
