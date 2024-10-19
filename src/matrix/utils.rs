@@ -13,11 +13,6 @@ pub(crate) fn delta_swap(x: u64, m: u64, shift: u32) -> u64 {
     (x ^ t) ^ (t << shift)
 }
 
-/// Returns `a` divided by `b` rounded up.
-pub(crate) const fn div_ceil(a: usize, b: usize) -> usize {
-    (a + b - 1) / b
-}
-
 /// Exchanges the masked bits of `x` with the corresponding bits in `y`, and returns the
 /// result.
 ///
