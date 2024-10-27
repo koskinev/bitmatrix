@@ -3,7 +3,7 @@ mod tests;
 
 mod utils;
 
-use utils::{delta_swap, row_sum_index, stripe_index, transpose_mask, wide_delta_swap};
+use utils::{delta_exchange, delta_swap, row_sum_index, stripe_index};
 
 /// A trait for bit matrices.
 pub trait BitMatrix {
@@ -251,7 +251,15 @@ pub trait BitMatrix {
 impl BitMatrix for [u8; 8] {
     type RowRepr = u8;
 
-    const IDENTITY: Self = [0x1, 0x2, 0x4, 0x8, 0x10, 0x20, 0x40, 0x80];
+    const IDENTITY: Self = {
+        let mut identity = [1; Self::SIZE];
+        let mut shift = 0;
+        while shift < Self::SIZE {
+            identity[shift] = 1 << shift;
+            shift += 1;
+        }
+        identity
+    };
     const SIZE: usize = 8;
     const ZERO: Self = [0; 8];
 
@@ -361,17 +369,12 @@ impl BitMatrix for [u8; 8] {
         }
         while unsorted > 0 {
             mask = 1 << unsorted.trailing_zeros();
-            if let Some(l) = temp.iter().position(|row| row & mask != 0) {
-                if let Some(x) = temp[l..].iter().rposition(|row| row & mask == 0) {
-                    let r = x + l + 1;
-                    temp[l..r].sort_unstable_by_key(|row| row & mask);
-                }
-            }
+            temp.sort_unstable_by_key(|row| row & mask);
             for (row, bits) in self.iter_mut().zip(temp.iter()) {
-                *row &= !(mask);
+                *row &= !mask;
                 *row |= bits & mask;
             }
-            unsorted &= !mask;
+            unsorted ^= mask;
         }
     }
 
@@ -386,24 +389,44 @@ impl BitMatrix for [u8; 8] {
         // fedcba98  00000000  f7d5b391  11001100  tld5ph91 11110000  VNFxph91
         // 76543210  10101010  e6c4a280  11001100  skc4og80 11110000  UMEwog80
 
-        let mut x = u64::from_ne_bytes(*self);
-        x = delta_swap(x, 0x00AA00AA00AA00AA, 7);
-        x = delta_swap(x, 0x0000CCCC0000CCCC, 14);
-        x = delta_swap(x, 0x00000000F0F0F0F0, 28);
-        *self = x.to_ne_bytes();
+        let mut res = u64::from_ne_bytes(*self);
+        let t = ((res >> 7) ^ res) & 0x00AA00AA00AA00AA;
+        res = (res ^ t) ^ (t << 7);
+        let t = ((res >> 14) ^ res) & 0x0000CCCC0000CCCC;
+        res = (res ^ t) ^ (t << 14);
+        let t = ((res >> 28) ^ res) & 0x00000000F0F0F0F0;
+        res = (res ^ t) ^ (t << 28);
+        *self = res.to_ne_bytes();
 
-        // There is an alternative implementation from Hacker's Delight 2nd ed.
+        // Below is an alternative implementation adapted from Hacker's Delight 2nd ed.
         // by Henry S. Warren, Jr. (2013), section 7-3 "Transposing a Bit Matrix".
+
+        // let mut res = u64::from_ne_bytes(*self);
+        // res = res & 0xAA55AA55AA55AA55
+        //     | (res & 0x00AA00AA00AA00AA) << 7
+        //     | (res >> 7) & 0x00AA00AA00AA00AA;
+        // res = res & 0xCCCC3333CCCC3333
+        //     | (res & 0x0000CCCC0000CCCC) << 14
+        //     | (res >> 14) & 0x0000CCCC0000CCCC;
+        // res = res & 0xF0F0F0F00F0F0F0F
+        //     | (res & 0x00000000F0F0F0F0) << 28
+        //     | (res >> 28) & 0x00000000F0F0F0F0;
+        // *self = res.to_ne_bytes();
     }
 }
 
 impl BitMatrix for [u16; 16] {
     type RowRepr = u16;
 
-    const IDENTITY: Self = [
-        0x1, 0x2, 0x4, 0x8, 0x10, 0x20, 0x40, 0x80, 0x100, 0x200, 0x400, 0x800, 0x1000, 0x2000,
-        0x4000, 0x8000,
-    ];
+    const IDENTITY: Self = {
+        let mut identity = [1; Self::SIZE];
+        let mut shift = 0;
+        while shift < Self::SIZE {
+            identity[shift] = 1 << shift;
+            shift += 1;
+        }
+        identity
+    };
     const SIZE: usize = 16;
     const ZERO: Self = [0; 16];
 
@@ -492,32 +515,52 @@ impl BitMatrix for [u16; 16] {
     }
 
     fn transpose(&mut self) {
-        type BV = [u64; 4];
-        const MASK0: BV = transpose_mask(1);
-        const MASK1: BV = transpose_mask(2);
-        const MASK2: BV = transpose_mask(4);
-        const MASK3: BV = transpose_mask(8);
+        // The matrix is read into four 64-bit integers, each containing four rows of the matrix.
+        let ptr: *mut [u64; 4] = self.as_mut_ptr().cast();
+        let [mut a, mut b, mut c, mut d] = unsafe { ptr.read_unaligned() };
 
-        let ptr: *mut BV = self.as_mut_ptr().cast();
-        let mut x = unsafe { ptr.read_unaligned() };
+        // The strategy is to first swap bits between `a`, `b`, `c`, and `d` so that each contains
+        // the bits of corresponding block of the transposed matrix, but not in the correct
+        // order. After this, the bits are permuted to get the correct order. The following performs
+        // the first step:
 
-        x = wide_delta_swap(x, MASK0, 15);
-        x = wide_delta_swap(x, MASK1, 30);
-        x = wide_delta_swap(x, MASK2, 60);
-        x = wide_delta_swap(x, MASK3, 120);
+        const MASK0: u64 = 0x00FF00FF00FF00FF;
+        const MASK1: u64 = 0x0F0F0F0F0F0F0F0F;
+        const MASK2: u64 = 0x0000AAAA0000AAAA;
+        const MASK3: u64 = 0x00000000CCCCCCCC;
 
-        unsafe { ptr.write_unaligned(x) };
+        (c, a) = delta_exchange(c, a, MASK0, 8);
+        (d, b) = delta_exchange(d, b, MASK0, 8);
+        (b, a) = delta_exchange(b, a, MASK1, 4);
+        (d, c) = delta_exchange(d, c, MASK1, 4);
+
+        // The following code performs the second step.
+        a = delta_swap(a, MASK2, 15);
+        b = delta_swap(b, MASK2, 15);
+        c = delta_swap(c, MASK2, 15);
+        d = delta_swap(d, MASK2, 15);
+        a = delta_swap(a, MASK3, 30);
+        b = delta_swap(b, MASK3, 30);
+        c = delta_swap(c, MASK3, 30);
+        d = delta_swap(d, MASK3, 30);
+
+        // Read the result back into the matrix.
+        unsafe { ptr.write_unaligned([a, b, c, d]) };
     }
 }
 
 impl BitMatrix for [u32; 32] {
     type RowRepr = u32;
 
-    const IDENTITY: Self = [
-        0x1, 0x2, 0x4, 0x8, 0x10, 0x20, 0x40, 0x80, 0x100, 0x200, 0x400, 0x800, 0x1000, 0x2000,
-        0x4000, 0x8000, 0x10000, 0x20000, 0x40000, 0x80000, 0x100000, 0x200000, 0x400000, 0x800000,
-        0x1000000, 0x2000000, 0x4000000, 0x8000000, 0x10000000, 0x20000000, 0x40000000, 0x80000000,
-    ];
+    const IDENTITY: Self = {
+        let mut identity = [1; Self::SIZE];
+        let mut shift = 0;
+        while shift < Self::SIZE {
+            identity[shift] = 1 << shift;
+            shift += 1;
+        }
+        identity
+    };
     const SIZE: usize = 32;
     const ZERO: Self = [0; 32];
 
@@ -606,96 +649,110 @@ impl BitMatrix for [u32; 32] {
     }
 
     fn transpose(&mut self) {
-        type BV = [u64; 16];
+        let mask = 0xFFFF;
+        (self[16], self[0]) = delta_exchange(self[16], self[0], mask, 16);
+        (self[17], self[1]) = delta_exchange(self[17], self[1], mask, 16);
+        (self[18], self[2]) = delta_exchange(self[18], self[2], mask, 16);
+        (self[19], self[3]) = delta_exchange(self[19], self[3], mask, 16);
+        (self[20], self[4]) = delta_exchange(self[20], self[4], mask, 16);
+        (self[21], self[5]) = delta_exchange(self[21], self[5], mask, 16);
+        (self[22], self[6]) = delta_exchange(self[22], self[6], mask, 16);
+        (self[23], self[7]) = delta_exchange(self[23], self[7], mask, 16);
+        (self[24], self[8]) = delta_exchange(self[24], self[8], mask, 16);
+        (self[25], self[9]) = delta_exchange(self[25], self[9], mask, 16);
+        (self[26], self[10]) = delta_exchange(self[26], self[10], mask, 16);
+        (self[27], self[11]) = delta_exchange(self[27], self[11], mask, 16);
+        (self[28], self[12]) = delta_exchange(self[28], self[12], mask, 16);
+        (self[29], self[13]) = delta_exchange(self[29], self[13], mask, 16);
+        (self[30], self[14]) = delta_exchange(self[30], self[14], mask, 16);
+        (self[31], self[15]) = delta_exchange(self[31], self[15], mask, 16);
 
-        const MASK0: BV = transpose_mask(1);
-        const MASK1: BV = transpose_mask(2);
-        const MASK2: BV = transpose_mask(4);
-        const MASK3: BV = transpose_mask(8);
-        const MASK4: BV = transpose_mask(16);
+        let mask = 0xFF00FF;
+        (self[8], self[0]) = delta_exchange(self[8], self[0], mask, 8);
+        (self[9], self[1]) = delta_exchange(self[9], self[1], mask, 8);
+        (self[10], self[2]) = delta_exchange(self[10], self[2], mask, 8);
+        (self[11], self[3]) = delta_exchange(self[11], self[3], mask, 8);
+        (self[12], self[4]) = delta_exchange(self[12], self[4], mask, 8);
+        (self[13], self[5]) = delta_exchange(self[13], self[5], mask, 8);
+        (self[14], self[6]) = delta_exchange(self[14], self[6], mask, 8);
+        (self[15], self[7]) = delta_exchange(self[15], self[7], mask, 8);
+        (self[24], self[16]) = delta_exchange(self[24], self[16], mask, 8);
+        (self[25], self[17]) = delta_exchange(self[25], self[17], mask, 8);
+        (self[26], self[18]) = delta_exchange(self[26], self[18], mask, 8);
+        (self[27], self[19]) = delta_exchange(self[27], self[19], mask, 8);
+        (self[28], self[20]) = delta_exchange(self[28], self[20], mask, 8);
+        (self[29], self[21]) = delta_exchange(self[29], self[21], mask, 8);
+        (self[30], self[22]) = delta_exchange(self[30], self[22], mask, 8);
+        (self[31], self[23]) = delta_exchange(self[31], self[23], mask, 8);
 
-        let ptr: *mut BV = self.as_mut_ptr().cast();
-        let mut x = unsafe { ptr.read_unaligned() };
+        let mask = 0xF0F0F0F;
+        (self[4], self[0]) = delta_exchange(self[4], self[0], mask, 4);
+        (self[5], self[1]) = delta_exchange(self[5], self[1], mask, 4);
+        (self[6], self[2]) = delta_exchange(self[6], self[2], mask, 4);
+        (self[7], self[3]) = delta_exchange(self[7], self[3], mask, 4);
+        (self[12], self[8]) = delta_exchange(self[12], self[8], mask, 4);
+        (self[13], self[9]) = delta_exchange(self[13], self[9], mask, 4);
+        (self[14], self[10]) = delta_exchange(self[14], self[10], mask, 4);
+        (self[15], self[11]) = delta_exchange(self[15], self[11], mask, 4);
+        (self[20], self[16]) = delta_exchange(self[20], self[16], mask, 4);
+        (self[21], self[17]) = delta_exchange(self[21], self[17], mask, 4);
+        (self[22], self[18]) = delta_exchange(self[22], self[18], mask, 4);
+        (self[23], self[19]) = delta_exchange(self[23], self[19], mask, 4);
+        (self[28], self[24]) = delta_exchange(self[28], self[24], mask, 4);
+        (self[29], self[25]) = delta_exchange(self[29], self[25], mask, 4);
+        (self[30], self[26]) = delta_exchange(self[30], self[26], mask, 4);
+        (self[31], self[27]) = delta_exchange(self[31], self[27], mask, 4);
 
-        x = wide_delta_swap(x, MASK0, 31);
-        x = wide_delta_swap(x, MASK1, 62);
-        x = wide_delta_swap(x, MASK2, 124);
-        x = wide_delta_swap(x, MASK3, 248);
-        x = wide_delta_swap(x, MASK4, 496);
+        let mask = 0x33333333;
+        (self[2], self[0]) = delta_exchange(self[2], self[0], mask, 2);
+        (self[3], self[1]) = delta_exchange(self[3], self[1], mask, 2);
+        (self[6], self[4]) = delta_exchange(self[6], self[4], mask, 2);
+        (self[7], self[5]) = delta_exchange(self[7], self[5], mask, 2);
+        (self[10], self[8]) = delta_exchange(self[10], self[8], mask, 2);
+        (self[11], self[9]) = delta_exchange(self[11], self[9], mask, 2);
+        (self[14], self[12]) = delta_exchange(self[14], self[12], mask, 2);
+        (self[15], self[13]) = delta_exchange(self[15], self[13], mask, 2);
+        (self[18], self[16]) = delta_exchange(self[18], self[16], mask, 2);
+        (self[19], self[17]) = delta_exchange(self[19], self[17], mask, 2);
+        (self[22], self[20]) = delta_exchange(self[22], self[20], mask, 2);
+        (self[23], self[21]) = delta_exchange(self[23], self[21], mask, 2);
+        (self[26], self[24]) = delta_exchange(self[26], self[24], mask, 2);
+        (self[27], self[25]) = delta_exchange(self[27], self[25], mask, 2);
+        (self[30], self[28]) = delta_exchange(self[30], self[28], mask, 2);
+        (self[31], self[29]) = delta_exchange(self[31], self[29], mask, 2);
 
-        unsafe { ptr.write_unaligned(x) };
+        let mask = 0x55555555;
+        (self[1], self[0]) = delta_exchange(self[1], self[0], mask, 1);
+        (self[3], self[2]) = delta_exchange(self[3], self[2], mask, 1);
+        (self[5], self[4]) = delta_exchange(self[5], self[4], mask, 1);
+        (self[7], self[6]) = delta_exchange(self[7], self[6], mask, 1);
+        (self[9], self[8]) = delta_exchange(self[9], self[8], mask, 1);
+        (self[11], self[10]) = delta_exchange(self[11], self[10], mask, 1);
+        (self[13], self[12]) = delta_exchange(self[13], self[12], mask, 1);
+        (self[15], self[14]) = delta_exchange(self[15], self[14], mask, 1);
+        (self[17], self[16]) = delta_exchange(self[17], self[16], mask, 1);
+        (self[19], self[18]) = delta_exchange(self[19], self[18], mask, 1);
+        (self[21], self[20]) = delta_exchange(self[21], self[20], mask, 1);
+        (self[23], self[22]) = delta_exchange(self[23], self[22], mask, 1);
+        (self[25], self[24]) = delta_exchange(self[25], self[24], mask, 1);
+        (self[27], self[26]) = delta_exchange(self[27], self[26], mask, 1);
+        (self[29], self[28]) = delta_exchange(self[29], self[28], mask, 1);
+        (self[31], self[30]) = delta_exchange(self[31], self[30], mask, 1);
     }
 }
 
 impl BitMatrix for [u64; 64] {
     type RowRepr = u64;
 
-    const IDENTITY: Self = [
-        0x1,
-        0x2,
-        0x4,
-        0x8,
-        0x10,
-        0x20,
-        0x40,
-        0x80,
-        0x100,
-        0x200,
-        0x400,
-        0x800,
-        0x1000,
-        0x2000,
-        0x4000,
-        0x8000,
-        0x10000,
-        0x20000,
-        0x40000,
-        0x80000,
-        0x100000,
-        0x200000,
-        0x400000,
-        0x800000,
-        0x1000000,
-        0x2000000,
-        0x4000000,
-        0x8000000,
-        0x10000000,
-        0x20000000,
-        0x40000000,
-        0x80000000,
-        0x100000000,
-        0x200000000,
-        0x400000000,
-        0x800000000,
-        0x1000000000,
-        0x2000000000,
-        0x4000000000,
-        0x8000000000,
-        0x10000000000,
-        0x20000000000,
-        0x40000000000,
-        0x80000000000,
-        0x100000000000,
-        0x200000000000,
-        0x400000000000,
-        0x800000000000,
-        0x1000000000000,
-        0x2000000000000,
-        0x4000000000000,
-        0x8000000000000,
-        0x10000000000000,
-        0x20000000000000,
-        0x40000000000000,
-        0x80000000000000,
-        0x100000000000000,
-        0x200000000000000,
-        0x400000000000000,
-        0x800000000000000,
-        0x1000000000000000,
-        0x2000000000000000,
-        0x4000000000000000,
-        0x8000000000000000,
-    ];
+    const IDENTITY: Self = {
+        let mut identity = [1; Self::SIZE];
+        let mut shift = 0;
+        while shift < Self::SIZE {
+            identity[shift] = 1 << shift;
+            shift += 1;
+        }
+        identity
+    };
     const SIZE: usize = 64;
     const ZERO: Self = [0; 64];
 
@@ -784,20 +841,208 @@ impl BitMatrix for [u64; 64] {
     }
 
     fn transpose(&mut self) {
-        type BV = [u64; 64];
+        let mask = 0xFFFFFFFF;
+        (self[32], self[0]) = delta_exchange(self[32], self[0], mask, 32);
+        (self[33], self[1]) = delta_exchange(self[33], self[1], mask, 32);
+        (self[34], self[2]) = delta_exchange(self[34], self[2], mask, 32);
+        (self[35], self[3]) = delta_exchange(self[35], self[3], mask, 32);
+        (self[36], self[4]) = delta_exchange(self[36], self[4], mask, 32);
+        (self[37], self[5]) = delta_exchange(self[37], self[5], mask, 32);
+        (self[38], self[6]) = delta_exchange(self[38], self[6], mask, 32);
+        (self[39], self[7]) = delta_exchange(self[39], self[7], mask, 32);
+        (self[40], self[8]) = delta_exchange(self[40], self[8], mask, 32);
+        (self[41], self[9]) = delta_exchange(self[41], self[9], mask, 32);
+        (self[42], self[10]) = delta_exchange(self[42], self[10], mask, 32);
+        (self[43], self[11]) = delta_exchange(self[43], self[11], mask, 32);
+        (self[44], self[12]) = delta_exchange(self[44], self[12], mask, 32);
+        (self[45], self[13]) = delta_exchange(self[45], self[13], mask, 32);
+        (self[46], self[14]) = delta_exchange(self[46], self[14], mask, 32);
+        (self[47], self[15]) = delta_exchange(self[47], self[15], mask, 32);
+        (self[48], self[16]) = delta_exchange(self[48], self[16], mask, 32);
+        (self[49], self[17]) = delta_exchange(self[49], self[17], mask, 32);
+        (self[50], self[18]) = delta_exchange(self[50], self[18], mask, 32);
+        (self[51], self[19]) = delta_exchange(self[51], self[19], mask, 32);
+        (self[52], self[20]) = delta_exchange(self[52], self[20], mask, 32);
+        (self[53], self[21]) = delta_exchange(self[53], self[21], mask, 32);
+        (self[54], self[22]) = delta_exchange(self[54], self[22], mask, 32);
+        (self[55], self[23]) = delta_exchange(self[55], self[23], mask, 32);
+        (self[56], self[24]) = delta_exchange(self[56], self[24], mask, 32);
+        (self[57], self[25]) = delta_exchange(self[57], self[25], mask, 32);
+        (self[58], self[26]) = delta_exchange(self[58], self[26], mask, 32);
+        (self[59], self[27]) = delta_exchange(self[59], self[27], mask, 32);
+        (self[60], self[28]) = delta_exchange(self[60], self[28], mask, 32);
+        (self[61], self[29]) = delta_exchange(self[61], self[29], mask, 32);
+        (self[62], self[30]) = delta_exchange(self[62], self[30], mask, 32);
+        (self[63], self[31]) = delta_exchange(self[63], self[31], mask, 32);
 
-        const MASK0: BV = transpose_mask(1);
-        const MASK1: BV = transpose_mask(2);
-        const MASK2: BV = transpose_mask(4);
-        const MASK3: BV = transpose_mask(8);
-        const MASK4: BV = transpose_mask(16);
-        const MASK5: BV = transpose_mask(32);
+        let mask = 0xFFFF0000FFFF;
+        (self[16], self[0]) = delta_exchange(self[16], self[0], mask, 16);
+        (self[17], self[1]) = delta_exchange(self[17], self[1], mask, 16);
+        (self[18], self[2]) = delta_exchange(self[18], self[2], mask, 16);
+        (self[19], self[3]) = delta_exchange(self[19], self[3], mask, 16);
+        (self[20], self[4]) = delta_exchange(self[20], self[4], mask, 16);
+        (self[21], self[5]) = delta_exchange(self[21], self[5], mask, 16);
+        (self[22], self[6]) = delta_exchange(self[22], self[6], mask, 16);
+        (self[23], self[7]) = delta_exchange(self[23], self[7], mask, 16);
+        (self[24], self[8]) = delta_exchange(self[24], self[8], mask, 16);
+        (self[25], self[9]) = delta_exchange(self[25], self[9], mask, 16);
+        (self[26], self[10]) = delta_exchange(self[26], self[10], mask, 16);
+        (self[27], self[11]) = delta_exchange(self[27], self[11], mask, 16);
+        (self[28], self[12]) = delta_exchange(self[28], self[12], mask, 16);
+        (self[29], self[13]) = delta_exchange(self[29], self[13], mask, 16);
+        (self[30], self[14]) = delta_exchange(self[30], self[14], mask, 16);
+        (self[31], self[15]) = delta_exchange(self[31], self[15], mask, 16);
+        (self[48], self[32]) = delta_exchange(self[48], self[32], mask, 16);
+        (self[49], self[33]) = delta_exchange(self[49], self[33], mask, 16);
+        (self[50], self[34]) = delta_exchange(self[50], self[34], mask, 16);
+        (self[51], self[35]) = delta_exchange(self[51], self[35], mask, 16);
+        (self[52], self[36]) = delta_exchange(self[52], self[36], mask, 16);
+        (self[53], self[37]) = delta_exchange(self[53], self[37], mask, 16);
+        (self[54], self[38]) = delta_exchange(self[54], self[38], mask, 16);
+        (self[55], self[39]) = delta_exchange(self[55], self[39], mask, 16);
+        (self[56], self[40]) = delta_exchange(self[56], self[40], mask, 16);
+        (self[57], self[41]) = delta_exchange(self[57], self[41], mask, 16);
+        (self[58], self[42]) = delta_exchange(self[58], self[42], mask, 16);
+        (self[59], self[43]) = delta_exchange(self[59], self[43], mask, 16);
+        (self[60], self[44]) = delta_exchange(self[60], self[44], mask, 16);
+        (self[61], self[45]) = delta_exchange(self[61], self[45], mask, 16);
+        (self[62], self[46]) = delta_exchange(self[62], self[46], mask, 16);
+        (self[63], self[47]) = delta_exchange(self[63], self[47], mask, 16);
 
-        *self = wide_delta_swap(*self, MASK0, 63);
-        *self = wide_delta_swap(*self, MASK1, 126);
-        *self = wide_delta_swap(*self, MASK2, 252);
-        *self = wide_delta_swap(*self, MASK3, 504);
-        *self = wide_delta_swap(*self, MASK4, 1008);
-        *self = wide_delta_swap(*self, MASK5, 2016);
+        let mask = 0xFF00FF00FF00FF;
+        (self[8], self[0]) = delta_exchange(self[8], self[0], mask, 8);
+        (self[9], self[1]) = delta_exchange(self[9], self[1], mask, 8);
+        (self[10], self[2]) = delta_exchange(self[10], self[2], mask, 8);
+        (self[11], self[3]) = delta_exchange(self[11], self[3], mask, 8);
+        (self[12], self[4]) = delta_exchange(self[12], self[4], mask, 8);
+        (self[13], self[5]) = delta_exchange(self[13], self[5], mask, 8);
+        (self[14], self[6]) = delta_exchange(self[14], self[6], mask, 8);
+        (self[15], self[7]) = delta_exchange(self[15], self[7], mask, 8);
+        (self[24], self[16]) = delta_exchange(self[24], self[16], mask, 8);
+        (self[25], self[17]) = delta_exchange(self[25], self[17], mask, 8);
+        (self[26], self[18]) = delta_exchange(self[26], self[18], mask, 8);
+        (self[27], self[19]) = delta_exchange(self[27], self[19], mask, 8);
+        (self[28], self[20]) = delta_exchange(self[28], self[20], mask, 8);
+        (self[29], self[21]) = delta_exchange(self[29], self[21], mask, 8);
+        (self[30], self[22]) = delta_exchange(self[30], self[22], mask, 8);
+        (self[31], self[23]) = delta_exchange(self[31], self[23], mask, 8);
+        (self[40], self[32]) = delta_exchange(self[40], self[32], mask, 8);
+        (self[41], self[33]) = delta_exchange(self[41], self[33], mask, 8);
+        (self[42], self[34]) = delta_exchange(self[42], self[34], mask, 8);
+        (self[43], self[35]) = delta_exchange(self[43], self[35], mask, 8);
+        (self[44], self[36]) = delta_exchange(self[44], self[36], mask, 8);
+        (self[45], self[37]) = delta_exchange(self[45], self[37], mask, 8);
+        (self[46], self[38]) = delta_exchange(self[46], self[38], mask, 8);
+        (self[47], self[39]) = delta_exchange(self[47], self[39], mask, 8);
+        (self[56], self[48]) = delta_exchange(self[56], self[48], mask, 8);
+        (self[57], self[49]) = delta_exchange(self[57], self[49], mask, 8);
+        (self[58], self[50]) = delta_exchange(self[58], self[50], mask, 8);
+        (self[59], self[51]) = delta_exchange(self[59], self[51], mask, 8);
+        (self[60], self[52]) = delta_exchange(self[60], self[52], mask, 8);
+        (self[61], self[53]) = delta_exchange(self[61], self[53], mask, 8);
+        (self[62], self[54]) = delta_exchange(self[62], self[54], mask, 8);
+        (self[63], self[55]) = delta_exchange(self[63], self[55], mask, 8);
+
+        let mask = 0xF0F0F0F0F0F0F0F;
+        (self[4], self[0]) = delta_exchange(self[4], self[0], mask, 4);
+        (self[5], self[1]) = delta_exchange(self[5], self[1], mask, 4);
+        (self[6], self[2]) = delta_exchange(self[6], self[2], mask, 4);
+        (self[7], self[3]) = delta_exchange(self[7], self[3], mask, 4);
+        (self[12], self[8]) = delta_exchange(self[12], self[8], mask, 4);
+        (self[13], self[9]) = delta_exchange(self[13], self[9], mask, 4);
+        (self[14], self[10]) = delta_exchange(self[14], self[10], mask, 4);
+        (self[15], self[11]) = delta_exchange(self[15], self[11], mask, 4);
+        (self[20], self[16]) = delta_exchange(self[20], self[16], mask, 4);
+        (self[21], self[17]) = delta_exchange(self[21], self[17], mask, 4);
+        (self[22], self[18]) = delta_exchange(self[22], self[18], mask, 4);
+        (self[23], self[19]) = delta_exchange(self[23], self[19], mask, 4);
+        (self[28], self[24]) = delta_exchange(self[28], self[24], mask, 4);
+        (self[29], self[25]) = delta_exchange(self[29], self[25], mask, 4);
+        (self[30], self[26]) = delta_exchange(self[30], self[26], mask, 4);
+        (self[31], self[27]) = delta_exchange(self[31], self[27], mask, 4);
+        (self[36], self[32]) = delta_exchange(self[36], self[32], mask, 4);
+        (self[37], self[33]) = delta_exchange(self[37], self[33], mask, 4);
+        (self[38], self[34]) = delta_exchange(self[38], self[34], mask, 4);
+        (self[39], self[35]) = delta_exchange(self[39], self[35], mask, 4);
+        (self[44], self[40]) = delta_exchange(self[44], self[40], mask, 4);
+        (self[45], self[41]) = delta_exchange(self[45], self[41], mask, 4);
+        (self[46], self[42]) = delta_exchange(self[46], self[42], mask, 4);
+        (self[47], self[43]) = delta_exchange(self[47], self[43], mask, 4);
+        (self[52], self[48]) = delta_exchange(self[52], self[48], mask, 4);
+        (self[53], self[49]) = delta_exchange(self[53], self[49], mask, 4);
+        (self[54], self[50]) = delta_exchange(self[54], self[50], mask, 4);
+        (self[55], self[51]) = delta_exchange(self[55], self[51], mask, 4);
+        (self[60], self[56]) = delta_exchange(self[60], self[56], mask, 4);
+        (self[61], self[57]) = delta_exchange(self[61], self[57], mask, 4);
+        (self[62], self[58]) = delta_exchange(self[62], self[58], mask, 4);
+        (self[63], self[59]) = delta_exchange(self[63], self[59], mask, 4);
+
+        let mask = 0x3333333333333333;
+        (self[2], self[0]) = delta_exchange(self[2], self[0], mask, 2);
+        (self[3], self[1]) = delta_exchange(self[3], self[1], mask, 2);
+        (self[6], self[4]) = delta_exchange(self[6], self[4], mask, 2);
+        (self[7], self[5]) = delta_exchange(self[7], self[5], mask, 2);
+        (self[10], self[8]) = delta_exchange(self[10], self[8], mask, 2);
+        (self[11], self[9]) = delta_exchange(self[11], self[9], mask, 2);
+        (self[14], self[12]) = delta_exchange(self[14], self[12], mask, 2);
+        (self[15], self[13]) = delta_exchange(self[15], self[13], mask, 2);
+        (self[18], self[16]) = delta_exchange(self[18], self[16], mask, 2);
+        (self[19], self[17]) = delta_exchange(self[19], self[17], mask, 2);
+        (self[22], self[20]) = delta_exchange(self[22], self[20], mask, 2);
+        (self[23], self[21]) = delta_exchange(self[23], self[21], mask, 2);
+        (self[26], self[24]) = delta_exchange(self[26], self[24], mask, 2);
+        (self[27], self[25]) = delta_exchange(self[27], self[25], mask, 2);
+        (self[30], self[28]) = delta_exchange(self[30], self[28], mask, 2);
+        (self[31], self[29]) = delta_exchange(self[31], self[29], mask, 2);
+        (self[34], self[32]) = delta_exchange(self[34], self[32], mask, 2);
+        (self[35], self[33]) = delta_exchange(self[35], self[33], mask, 2);
+        (self[38], self[36]) = delta_exchange(self[38], self[36], mask, 2);
+        (self[39], self[37]) = delta_exchange(self[39], self[37], mask, 2);
+        (self[42], self[40]) = delta_exchange(self[42], self[40], mask, 2);
+        (self[43], self[41]) = delta_exchange(self[43], self[41], mask, 2);
+        (self[46], self[44]) = delta_exchange(self[46], self[44], mask, 2);
+        (self[47], self[45]) = delta_exchange(self[47], self[45], mask, 2);
+        (self[50], self[48]) = delta_exchange(self[50], self[48], mask, 2);
+        (self[51], self[49]) = delta_exchange(self[51], self[49], mask, 2);
+        (self[54], self[52]) = delta_exchange(self[54], self[52], mask, 2);
+        (self[55], self[53]) = delta_exchange(self[55], self[53], mask, 2);
+        (self[58], self[56]) = delta_exchange(self[58], self[56], mask, 2);
+        (self[59], self[57]) = delta_exchange(self[59], self[57], mask, 2);
+        (self[62], self[60]) = delta_exchange(self[62], self[60], mask, 2);
+        (self[63], self[61]) = delta_exchange(self[63], self[61], mask, 2);
+
+        let mask = 0x5555555555555555;
+        (self[1], self[0]) = delta_exchange(self[1], self[0], mask, 1);
+        (self[3], self[2]) = delta_exchange(self[3], self[2], mask, 1);
+        (self[5], self[4]) = delta_exchange(self[5], self[4], mask, 1);
+        (self[7], self[6]) = delta_exchange(self[7], self[6], mask, 1);
+        (self[9], self[8]) = delta_exchange(self[9], self[8], mask, 1);
+        (self[11], self[10]) = delta_exchange(self[11], self[10], mask, 1);
+        (self[13], self[12]) = delta_exchange(self[13], self[12], mask, 1);
+        (self[15], self[14]) = delta_exchange(self[15], self[14], mask, 1);
+        (self[17], self[16]) = delta_exchange(self[17], self[16], mask, 1);
+        (self[19], self[18]) = delta_exchange(self[19], self[18], mask, 1);
+        (self[21], self[20]) = delta_exchange(self[21], self[20], mask, 1);
+        (self[23], self[22]) = delta_exchange(self[23], self[22], mask, 1);
+        (self[25], self[24]) = delta_exchange(self[25], self[24], mask, 1);
+        (self[27], self[26]) = delta_exchange(self[27], self[26], mask, 1);
+        (self[29], self[28]) = delta_exchange(self[29], self[28], mask, 1);
+        (self[31], self[30]) = delta_exchange(self[31], self[30], mask, 1);
+        (self[33], self[32]) = delta_exchange(self[33], self[32], mask, 1);
+        (self[35], self[34]) = delta_exchange(self[35], self[34], mask, 1);
+        (self[37], self[36]) = delta_exchange(self[37], self[36], mask, 1);
+        (self[39], self[38]) = delta_exchange(self[39], self[38], mask, 1);
+        (self[41], self[40]) = delta_exchange(self[41], self[40], mask, 1);
+        (self[43], self[42]) = delta_exchange(self[43], self[42], mask, 1);
+        (self[45], self[44]) = delta_exchange(self[45], self[44], mask, 1);
+        (self[47], self[46]) = delta_exchange(self[47], self[46], mask, 1);
+        (self[49], self[48]) = delta_exchange(self[49], self[48], mask, 1);
+        (self[51], self[50]) = delta_exchange(self[51], self[50], mask, 1);
+        (self[53], self[52]) = delta_exchange(self[53], self[52], mask, 1);
+        (self[55], self[54]) = delta_exchange(self[55], self[54], mask, 1);
+        (self[57], self[56]) = delta_exchange(self[57], self[56], mask, 1);
+        (self[59], self[58]) = delta_exchange(self[59], self[58], mask, 1);
+        (self[61], self[60]) = delta_exchange(self[61], self[60], mask, 1);
+        (self[63], self[62]) = delta_exchange(self[63], self[62], mask, 1);
     }
 }
