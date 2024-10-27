@@ -1,7 +1,9 @@
+use std::time::Duration;
+
 use utils::{wide_and, wide_mul, wide_shl, wide_shr, wide_xor};
 
 use super::*;
-use crate::wyrand::{PRng, WyRng};
+use crate::wyrand::{Random, WyRng};
 
 /// Converts an array of `u64`s to a `Vec<u8>`, where each element represents one bit in the
 /// input array. The bits are stored in little-endian order.
@@ -108,10 +110,10 @@ fn wide_ops() {
     let split = |x: u128| [x as u64, (x >> 64) as u64];
 
     for _ in 0..ITERS {
-        let a = rng.u128();
-        let b = rng.u128();
-        let shl = rng.bounded_u32(0, 128);
-        let shr = rng.bounded_u32(0, 128);
+        let a: u128 = rng.random();
+        let b: u128 = rng.random();
+        let shl: u32 = rng.bounded(0, 128);
+        let shr: u32 = rng.bounded(0, 128);
 
         let tru_and = split(a & b);
         let tru_or = split(a | b);
@@ -144,11 +146,11 @@ fn wide_ops() {
     // Next, test the long operations on randomized u64s.
     const N: usize = 4;
     for _ in 0..ITERS {
-        let a: [u64; N] = rng.next();
-        let b: [u64; N] = rng.next();
+        let a: [u64; N] = rng.random();
+        let b: [u64; N] = rng.random();
 
-        let shl = rng.bounded_u32(0, 64 * N as u32);
-        let shr = rng.bounded_u32(0, 64 * N as u32);
+        let shl = rng.bounded(0, 64 * N as u32);
+        let shr = rng.bounded(0, 64 * N as u32);
 
         let bv_a = u64s_to_bv(a);
         let bv_b = u64s_to_bv(b);
@@ -181,8 +183,8 @@ fn matmul_8x8() {
 
     let identity = Mat::IDENTITY;
     for _i in 0..ITERS {
-        let a: Mat = rng.next();
-        let b: Mat = rng.next();
+        let a: Mat = rng.random();
+        let b: Mat = rng.random();
 
         let a_x_i = a.matmul(identity);
         let i_x_a = identity.matmul(a);
@@ -211,8 +213,8 @@ fn matmul_16x16() {
 
     let identity = Mat::IDENTITY;
     for _i in 0..ITERS {
-        let a: Mat = rng.next();
-        let b: Mat = rng.next();
+        let a: Mat = rng.random();
+        let b: Mat = rng.random();
 
         let a_x_i = a.matmul(identity);
         let i_x_a = identity.matmul(a);
@@ -241,8 +243,8 @@ fn matmul_32x32() {
 
     let identity = Mat::IDENTITY;
     for _i in 0..ITERS {
-        let a: Mat = rng.next();
-        let b: Mat = rng.next();
+        let a: Mat = rng.random();
+        let b: Mat = rng.random();
 
         let a_x_i = a.matmul(identity);
         let i_x_a = identity.matmul(a);
@@ -271,8 +273,8 @@ fn matmul_64x64() {
 
     let identity = Mat::IDENTITY;
     for _i in 0..ITERS {
-        let a: Mat = rng.next();
-        let b: Mat = rng.next();
+        let a: Mat = rng.random();
+        let b: Mat = rng.random();
 
         let a_x_i = a.matmul(identity);
         let i_x_a = identity.matmul(a);
@@ -328,7 +330,7 @@ fn transpose_8x8() {
     type Mat = [u8; 8];
 
     for _i in 0..ITERS {
-        let matrix: Mat = rng.next();
+        let matrix: Mat = rng.random();
         let transpose = matrix.transposed();
         for i in 0..Mat::SIZE {
             for j in 0..Mat::SIZE {
@@ -390,7 +392,7 @@ fn transpose_16x16() {
     type Mat = [u16; 16];
 
     for _i in 0..ITERS {
-        let matrix: Mat = rng.next();
+        let matrix: Mat = rng.random();
         let transpose = matrix.transposed();
         for i in 0..Mat::SIZE {
             for j in 0..Mat::SIZE {
@@ -407,7 +409,7 @@ fn transpose_32x32() {
     type Mat = [u32; 32];
 
     for _i in 0..ITERS {
-        let matrix: Mat = rng.next();
+        let matrix: Mat = rng.random();
         let transpose = matrix.transposed();
         for i in 0..Mat::SIZE {
             for j in 0..Mat::SIZE {
@@ -417,21 +419,49 @@ fn transpose_32x32() {
     }
 }
 
+#[ignore]
 #[test]
-fn transpose_64x64() {
-    const ITERS: usize = 1000;
-    let mut rng: WyRng = Default::default();
-    type Mat = [u64; 64];
+fn transpose_perf() {
+    // cargo test --release -- --nocapture --ignored transpose_perf
 
-    for _i in 0..ITERS {
-        let matrix: Mat = rng.next();
-        let transpose = matrix.transposed();
-        for i in 0..Mat::SIZE {
-            for j in 0..Mat::SIZE {
-                assert_eq!(matrix.get(i, j), transpose.get(j, i));
-            }
+    use std::time::Instant;
+
+    fn run<U, const N: usize>(count: usize)
+    where
+        [U; N]: BitMatrix,
+        U: Random<WyRng> + Copy,
+    {
+        // Generate test matrices.
+        let mut rng: WyRng = Default::default();
+        let original: Vec<[U; N]> = (0..count).map(|_| rng.random()).collect();
+
+        // Create a mutable copy of the original matrices.
+        let mut matrices = original.clone();
+
+        // Transpose each matrix and measure the time.
+        let start = Instant::now();
+        for matrix in &mut matrices {
+            matrix.transpose();
         }
+        let duration = start.elapsed();
+
+        // Sample one element from each matrix and check if it was transposed correctly.
+        for (matrix, transpose) in original.iter().zip(matrices.iter()) {
+            let i = rng.bounded(0, N);
+            let j = rng.bounded(0, N);
+            assert_eq!(matrix.get(i, j), transpose.get(j, i));
+        }
+
+        println!(
+            "Transpose {N}x{N}: {duration:?} ({count} ops, {tput:.6} ns/op)",
+            tput = duration.as_nanos() as f64 / count as f64
+        );
     }
+
+    run::<u8, 8>(100_000_000);
+    run::<u16, 16>(50_000_000);
+    run::<u32, 32>(25_000_000);
+    run::<u64, 64>(10_000_000);
 }
 
 #[rustfmt::skip]
