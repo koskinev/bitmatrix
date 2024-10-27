@@ -1,3 +1,27 @@
+use std::ops::{BitAnd, BitXor, Shl, Shr};
+
+#[inline]
+/// Exchanges the masked bits in `x` with the bits in `y`, masked by `mask << shift`. Returns the
+/// tuple (x, y) with the exchanged bits. For this function to work properly, the mask  and the
+/// shifted mask should not overlap, ie. `mask & (mask << shift) == 0` and no bits should be shifted
+/// out, ie. `((mask << shift) >> shift) == mask`.
+///
+/// ```text
+///  x <- abcd_efgh
+///  y <- ijkl_mnop
+///  m <- 0011_0011
+///  (x, y) <- delta_exchange(x, y, m, 2)
+///  x == abij_efmn
+///  y == cdkl_ghop
+/// ```
+pub(crate) fn delta_exchange<U>(x: U, y: U, mask: U, shift: u32) -> (U, U)
+where
+    U: BitXor<Output = U> + BitAnd<Output = U> + Shl<u32, Output = U> + Shr<u32, Output = U> + Copy,
+{
+    let t = ((y >> shift) ^ x) & mask;
+    (x ^ t, y ^ (t << shift))
+}
+
 /// Moves the masked bits in `x` to the left by `shift` positions. For this function to work
 /// properly, the mask and the shifted mask should not overlap, ie. `mask & (mask << shift) == 0`
 /// and no bits should be shifted out, ie. `((mask << shift) >> shift) ==  mask`.  
@@ -8,8 +32,8 @@
 ///   s <- x.delta_swap(m, 3)
 ///   s == dbca_hfge
 /// ```
-pub(crate) fn delta_swap(x: u64, m: u64, shift: u32) -> u64 {
-    let t = ((x >> shift) ^ x) & m;
+pub(crate) fn delta_swap(x: u64, mask: u64, shift: u32) -> u64 {
+    let t = ((x >> shift) ^ x) & mask;
     (x ^ t) ^ (t << shift)
 }
 
