@@ -294,7 +294,7 @@ class UInt:
         zero = UInt.from_value(0, self.width())
         prod = zero
         while a != zero:
-            prod += UInt.from_exprs([Bit(1) & a[-1]] * self.width()) & b
+            prod += UInt.from_exprs([Bit(1) & a[0]] * self.width()) & b
             a >>= 1
             b <<= 1
         return prod
@@ -515,6 +515,17 @@ class UInt:
         assert n >= 0, "Shift must be non-negative."
         rotated = self.bits[n:] + self.bits[:n]
         return UInt.from_exprs(rotated)
+
+    def set_width(self, width):
+        """
+        Sets the bit width to `width`. If `width` is less than the current width, the most significant bits will be removed.
+        If `width` is greater than the current width, the `UInt` will be zero-extended.
+        """
+        if width < self.width():
+            self.bits = self.bits[:width]
+        elif width > self.width():
+            self.bits = self.bits + [Bit(0)] * (width - self.width())
+        return self
 
     def width(self) -> int:
         """
