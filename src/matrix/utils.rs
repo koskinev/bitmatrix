@@ -22,6 +22,7 @@ where
     (x ^ t, y ^ (t << shift))
 }
 
+#[inline]
 /// Moves the masked bits in `x` to the left by `shift` positions. For this function to work
 /// properly, the mask and the shifted mask should not overlap, ie. `mask & (mask << shift) == 0`
 /// and no bits should be shifted out, ie. `((mask << shift) >> shift) ==  mask`.  
@@ -32,7 +33,10 @@ where
 ///   s <- x.delta_swap(m, 3)
 ///   s == dbca_hfge
 /// ```
-pub(crate) fn delta_swap(x: u64, mask: u64, shift: u32) -> u64 {
+pub(crate) fn delta_swap<U>(x: U, mask: U, shift: u32) -> U
+where
+    U: BitXor<Output = U> + BitAnd<Output = U> + Shl<u32, Output = U> + Shr<u32, Output = U> + Copy,
+{
     let t = ((x >> shift) ^ x) & mask;
     (x ^ t) ^ (t << shift)
 }
