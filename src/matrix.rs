@@ -439,43 +439,64 @@ impl BitMatrix for [u16; 16] {
         ((self[row] >> col) & 1) as u8
     }
 
-    fn matmul(self, rhs: Self) -> Self {
-        // // Read the matrix into four 64-bit integers, each containing four rows of the matrix.
-        // let this = unsafe { self.as_mut_ptr().cast::<[u64; 4]>().read_unaligned() };
-        // let mut m: [u64; 4] = [0; 4];
+    fn matmul(mut self, rhs: Self) -> Self {
+        // Read the matrix into four 64-bit integers, each containing four rows of the matrix.
+        let this = unsafe { self.as_mut_ptr().cast::<[u64; 4]>().read_unaligned() };
+        let mut res: [u64; 4] = [0; 4];
 
-        // const COL: u64 = 0x0001000100010001;
+        const COL: u64 = 0x0001000100010001;
 
-        // let ptr: *mut Self = m.as_mut_ptr().cast();
-        // unsafe { ptr.read() }
-
-        const STRIPE_BITS: usize = 4;
-        const SUM_TABLE_LEN: usize = 1 << STRIPE_BITS;
-        const STRIPE_INDEX: [usize; SUM_TABLE_LEN] = stripe_index();
-        const ROW_SUM_INDEX: [usize; SUM_TABLE_LEN] = row_sum_index();
-
-        let mut sums = [0; SUM_TABLE_LEN];
-        let mut result = [0; Self::SIZE];
-        let mut mask = (1 << STRIPE_BITS) - 1;
-        let mut shift = 0;
-        while mask != 0 {
-            let range = shift..(shift + STRIPE_BITS).min(Self::SIZE);
-            let stripe = &rhs[range];
-            sums[0] = 0;
-            for i in 1..SUM_TABLE_LEN {
-                let j = STRIPE_INDEX[i];
-                sums[i] = sums[i - 1] ^ stripe[j];
-            }
-
-            for (i, row) in self.iter().enumerate() {
-                let prefix = ((row & mask) >> shift) as usize;
-                let j = ROW_SUM_INDEX[prefix];
-                result[i] ^= sums[j];
-            }
-            mask <<= STRIPE_BITS;
-            shift += STRIPE_BITS;
+        for k in 0..4 {
+            res[k] ^= (COL & this[k]) * rhs[0] as u64;
+            res[k] ^= (COL & (this[k] >> 1)) * rhs[1] as u64;
+            res[k] ^= (COL & (this[k] >> 2)) * rhs[2] as u64;
+            res[k] ^= (COL & (this[k] >> 3)) * rhs[3] as u64;
+            res[k] ^= (COL & (this[k] >> 4)) * rhs[4] as u64;
+            res[k] ^= (COL & (this[k] >> 5)) * rhs[5] as u64;
+            res[k] ^= (COL & (this[k] >> 6)) * rhs[6] as u64;
+            res[k] ^= (COL & (this[k] >> 7)) * rhs[7] as u64;
+            res[k] ^= (COL & (this[k] >> 8)) * rhs[8] as u64;
+            res[k] ^= (COL & (this[k] >> 9)) * rhs[9] as u64;
+            res[k] ^= (COL & (this[k] >> 10)) * rhs[10] as u64;
+            res[k] ^= (COL & (this[k] >> 11)) * rhs[11] as u64;
+            res[k] ^= (COL & (this[k] >> 12)) * rhs[12] as u64;
+            res[k] ^= (COL & (this[k] >> 13)) * rhs[13] as u64;
+            res[k] ^= (COL & (this[k] >> 14)) * rhs[14] as u64;
+            res[k] ^= (COL & (this[k] >> 15)) * rhs[15] as u64;
         }
-        result
+
+        let ptr: *mut Self = res.as_mut_ptr().cast();
+        unsafe { ptr.read() }
+
+        // The following is an alternative implementation using the four russians algorithm.
+
+        // const STRIPE_BITS: usize = 4;
+        // const SUM_TABLE_LEN: usize = 1 << STRIPE_BITS;
+        // const STRIPE_INDEX: [usize; SUM_TABLE_LEN] = stripe_index();
+        // const ROW_SUM_INDEX: [usize; SUM_TABLE_LEN] = row_sum_index();
+
+        // let mut sums = [0; SUM_TABLE_LEN];
+        // let mut result = [0; Self::SIZE];
+        // let mut mask = (1 << STRIPE_BITS) - 1;
+        // let mut shift = 0;
+        // while mask != 0 {
+        //     let range = shift..(shift + STRIPE_BITS).min(Self::SIZE);
+        //     let stripe = &rhs[range];
+        //     sums[0] = 0;
+        //     for i in 1..SUM_TABLE_LEN {
+        //         let j = STRIPE_INDEX[i];
+        //         sums[i] = sums[i - 1] ^ stripe[j];
+        //     }
+
+        //     for (i, row) in self.iter().enumerate() {
+        //         let prefix = ((row & mask) >> shift) as usize;
+        //         let j = ROW_SUM_INDEX[prefix];
+        //         result[i] ^= sums[j];
+        //     }
+        //     mask <<= STRIPE_BITS;
+        //     shift += STRIPE_BITS;
+        // }
+        // result
     }
 
     fn reverse_rows(&mut self) {
