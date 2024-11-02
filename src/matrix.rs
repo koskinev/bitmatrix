@@ -440,6 +440,15 @@ impl BitMatrix for [u16; 16] {
     }
 
     fn matmul(self, rhs: Self) -> Self {
+        // // Read the matrix into four 64-bit integers, each containing four rows of the matrix.
+        // let this = unsafe { self.as_mut_ptr().cast::<[u64; 4]>().read_unaligned() };
+        // let mut m: [u64; 4] = [0; 4];
+
+        // const COL: u64 = 0x0001000100010001;
+
+        // let ptr: *mut Self = m.as_mut_ptr().cast();
+        // unsafe { ptr.read() }
+
         const STRIPE_BITS: usize = 4;
         const SUM_TABLE_LEN: usize = 1 << STRIPE_BITS;
         const STRIPE_INDEX: [usize; SUM_TABLE_LEN] = stripe_index();
