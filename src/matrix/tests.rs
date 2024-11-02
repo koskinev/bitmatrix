@@ -320,7 +320,7 @@ fn matmul_perf() {
         let duration = start.elapsed();
 
         println!(
-            "Transpose {N}x{N}: {duration:?} ({count} ops, {tput:.6} ns/op)",
+            "Multiply {N}x{N}: {duration:?} ({count} ops, {tput:.6} ns/op)",
             tput = duration.as_nanos() as f64 / count as f64
         );
     }
