@@ -1,4 +1,3 @@
-use std::time::Duration;
 
 use utils::{wide_and, wide_mul, wide_shl, wide_shr, wide_xor};
 
@@ -293,6 +292,43 @@ fn matmul_64x64() {
         }
         assert_eq!(a_x_b, expected);
     }
+}
+
+#[ignore]
+#[test]
+fn matmul_perf() {
+    // cargo test --release -- --nocapture --ignored matmul_perf
+
+    use std::time::Instant;
+
+    fn run<U, const N: usize>(count: usize)
+    where
+        [U; N]: BitMatrix,
+        U: Random<WyRng> + Copy,
+    {
+        // Generate test matrices.
+        let mut rng: WyRng = Default::default();
+        let mut data: Vec<([U; N], [U; N], [U; N])> = (0..count)
+            .map(|_| (rng.random(), rng.random(), <[U; N]>::IDENTITY))
+            .collect();
+
+        // Multiply the matrices and measure the time.
+        let start = Instant::now();
+        for (a, b, result) in &mut data {
+            *result = a.matmul(*b);
+        }
+        let duration = start.elapsed();
+
+        println!(
+            "Transpose {N}x{N}: {duration:?} ({count} ops, {tput:.6} ns/op)",
+            tput = duration.as_nanos() as f64 / count as f64
+        );
+    }
+
+    run::<u8, 8>(200_000_000);
+    run::<u16, 16>(20_000_000);
+    run::<u32, 32>(5_000_000);
+    run::<u64, 64>(1_000_000);
 }
 
 #[rustfmt::skip]
