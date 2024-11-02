@@ -309,34 +309,31 @@ impl BitMatrix for [u8; 8] {
         //
         // D = (COL & A) * (ROW & B) gives the result:
         //
-        // (a70 & b07) (a70 & b17) . . . (a70 & b77)
-        // (a71 & b07)    . . .          (a71 & b77)
+        // (a07 & b70) (a07 & b71) . . . (a07 & b77)
+        // (a17 & b70)    . . .          (a17 & b77)
         //      .          .                  .
         //      .            .                .
         //      .              .              .
-        // (a76 & b07)      . . .        (a76 & b77)
-        // (a77 & b07) (a77 & b17) . . . (a77 & b77)
+        // (a67 & b70)      . . .        (a67 & b77)
+        // (a77 & b70) (a77 & b71) . . . (a77 & b77)
         //
-        // or dij = a7i & bj7, which is the last element in the XOR sum above. The
+        // or dij = ai7 & b7j, which is the last element in the XOR sum above. The
         // second to last element of the sum a6i & bj6 can be calculated by shifting
         // A to the right by on (moving the columns to the left by one) and B to
         // the left by8 (moving the rows down by one). The rest of the sum can be
         // calculated in a similar way.
 
         const COL: u64 = 0x0101010101010101;
-        const ROW: u64 = 0x00000000000000FF;
 
         let this = u64::from_ne_bytes(self);
-        let other = u64::from_ne_bytes(rhs);
-
-        let mut result = (COL & this) * (ROW & other);
-        result ^= (COL & (this >> 1)) * (ROW & (other >> 8));
-        result ^= (COL & (this >> 2)) * (ROW & (other >> 16));
-        result ^= (COL & (this >> 3)) * (ROW & (other >> 24));
-        result ^= (COL & (this >> 4)) * (ROW & (other >> 32));
-        result ^= (COL & (this >> 5)) * (ROW & (other >> 40));
-        result ^= (COL & (this >> 6)) * (ROW & (other >> 48));
-        result ^= (COL & (this >> 7)) * (ROW & (other >> 56));
+        let mut result = (COL & this) * rhs[0] as u64;
+        result ^= (COL & (this >> 1)) * rhs[1] as u64;
+        result ^= (COL & (this >> 2)) * rhs[2] as u64;
+        result ^= (COL & (this >> 3)) * rhs[3] as u64;
+        result ^= (COL & (this >> 4)) * rhs[4] as u64;
+        result ^= (COL & (this >> 5)) * rhs[5] as u64;
+        result ^= (COL & (this >> 6)) * rhs[6] as u64;
+        result ^= (COL & (this >> 7)) * rhs[7] as u64;
 
         result.to_ne_bytes()
     }
@@ -515,7 +512,7 @@ impl BitMatrix for [u16; 16] {
     }
 
     fn transpose(&mut self) {
-        // The matrix is read into four 64-bit integers, each containing four rows of the matrix.
+        // Read the matrix into four 64-bit integers, each containing four rows of the matrix.
         let ptr: *mut [u64; 4] = self.as_mut_ptr().cast();
         let [mut a, mut b, mut c, mut d] = unsafe { ptr.read_unaligned() };
 
@@ -649,95 +646,52 @@ impl BitMatrix for [u32; 32] {
     }
 
     fn transpose(&mut self) {
-        let mask = 0xFFFF;
-        (self[16], self[0]) = delta_exchange(self[16], self[0], mask, 16);
-        (self[17], self[1]) = delta_exchange(self[17], self[1], mask, 16);
-        (self[18], self[2]) = delta_exchange(self[18], self[2], mask, 16);
-        (self[19], self[3]) = delta_exchange(self[19], self[3], mask, 16);
-        (self[20], self[4]) = delta_exchange(self[20], self[4], mask, 16);
-        (self[21], self[5]) = delta_exchange(self[21], self[5], mask, 16);
-        (self[22], self[6]) = delta_exchange(self[22], self[6], mask, 16);
-        (self[23], self[7]) = delta_exchange(self[23], self[7], mask, 16);
-        (self[24], self[8]) = delta_exchange(self[24], self[8], mask, 16);
-        (self[25], self[9]) = delta_exchange(self[25], self[9], mask, 16);
-        (self[26], self[10]) = delta_exchange(self[26], self[10], mask, 16);
-        (self[27], self[11]) = delta_exchange(self[27], self[11], mask, 16);
-        (self[28], self[12]) = delta_exchange(self[28], self[12], mask, 16);
-        (self[29], self[13]) = delta_exchange(self[29], self[13], mask, 16);
-        (self[30], self[14]) = delta_exchange(self[30], self[14], mask, 16);
-        (self[31], self[15]) = delta_exchange(self[31], self[15], mask, 16);
+        // Read the matrix into 8 128-bit integers, each containing four rows of the matrix.
+        let ptr: *mut [u128; 8] = self.as_mut_ptr().cast();
+        let [mut a, mut b, mut c, mut d, mut e, mut f, mut g, mut h] =
+            unsafe { ptr.read_unaligned() };
 
-        let mask = 0xFF00FF;
-        (self[8], self[0]) = delta_exchange(self[8], self[0], mask, 8);
-        (self[9], self[1]) = delta_exchange(self[9], self[1], mask, 8);
-        (self[10], self[2]) = delta_exchange(self[10], self[2], mask, 8);
-        (self[11], self[3]) = delta_exchange(self[11], self[3], mask, 8);
-        (self[12], self[4]) = delta_exchange(self[12], self[4], mask, 8);
-        (self[13], self[5]) = delta_exchange(self[13], self[5], mask, 8);
-        (self[14], self[6]) = delta_exchange(self[14], self[6], mask, 8);
-        (self[15], self[7]) = delta_exchange(self[15], self[7], mask, 8);
-        (self[24], self[16]) = delta_exchange(self[24], self[16], mask, 8);
-        (self[25], self[17]) = delta_exchange(self[25], self[17], mask, 8);
-        (self[26], self[18]) = delta_exchange(self[26], self[18], mask, 8);
-        (self[27], self[19]) = delta_exchange(self[27], self[19], mask, 8);
-        (self[28], self[20]) = delta_exchange(self[28], self[20], mask, 8);
-        (self[29], self[21]) = delta_exchange(self[29], self[21], mask, 8);
-        (self[30], self[22]) = delta_exchange(self[30], self[22], mask, 8);
-        (self[31], self[23]) = delta_exchange(self[31], self[23], mask, 8);
+        const MASK0: u128 = 0x0000FFFF0000FFFF0000FFFF0000FFFF;
+        const MASK1: u128 = 0x00FF00FF00FF00FF00FF00FF00FF00FF;
+        const MASK2: u128 = 0x0F0F0F0F0F0F0F0F0F0F0F0F0F0F0F0F;
+        const MASK3: u128 = 0x00000000AAAAAAAA00000000AAAAAAAA;
+        const MASK4: u128 = 0x0000000000000000CCCCCCCCCCCCCCCC;
 
-        let mask = 0xF0F0F0F;
-        (self[4], self[0]) = delta_exchange(self[4], self[0], mask, 4);
-        (self[5], self[1]) = delta_exchange(self[5], self[1], mask, 4);
-        (self[6], self[2]) = delta_exchange(self[6], self[2], mask, 4);
-        (self[7], self[3]) = delta_exchange(self[7], self[3], mask, 4);
-        (self[12], self[8]) = delta_exchange(self[12], self[8], mask, 4);
-        (self[13], self[9]) = delta_exchange(self[13], self[9], mask, 4);
-        (self[14], self[10]) = delta_exchange(self[14], self[10], mask, 4);
-        (self[15], self[11]) = delta_exchange(self[15], self[11], mask, 4);
-        (self[20], self[16]) = delta_exchange(self[20], self[16], mask, 4);
-        (self[21], self[17]) = delta_exchange(self[21], self[17], mask, 4);
-        (self[22], self[18]) = delta_exchange(self[22], self[18], mask, 4);
-        (self[23], self[19]) = delta_exchange(self[23], self[19], mask, 4);
-        (self[28], self[24]) = delta_exchange(self[28], self[24], mask, 4);
-        (self[29], self[25]) = delta_exchange(self[29], self[25], mask, 4);
-        (self[30], self[26]) = delta_exchange(self[30], self[26], mask, 4);
-        (self[31], self[27]) = delta_exchange(self[31], self[27], mask, 4);
+        (e, a) = delta_exchange(e, a, MASK0, 16);
+        (f, b) = delta_exchange(f, b, MASK0, 16);
+        (g, c) = delta_exchange(g, c, MASK0, 16);
+        (h, d) = delta_exchange(h, d, MASK0, 16);
 
-        let mask = 0x33333333;
-        (self[2], self[0]) = delta_exchange(self[2], self[0], mask, 2);
-        (self[3], self[1]) = delta_exchange(self[3], self[1], mask, 2);
-        (self[6], self[4]) = delta_exchange(self[6], self[4], mask, 2);
-        (self[7], self[5]) = delta_exchange(self[7], self[5], mask, 2);
-        (self[10], self[8]) = delta_exchange(self[10], self[8], mask, 2);
-        (self[11], self[9]) = delta_exchange(self[11], self[9], mask, 2);
-        (self[14], self[12]) = delta_exchange(self[14], self[12], mask, 2);
-        (self[15], self[13]) = delta_exchange(self[15], self[13], mask, 2);
-        (self[18], self[16]) = delta_exchange(self[18], self[16], mask, 2);
-        (self[19], self[17]) = delta_exchange(self[19], self[17], mask, 2);
-        (self[22], self[20]) = delta_exchange(self[22], self[20], mask, 2);
-        (self[23], self[21]) = delta_exchange(self[23], self[21], mask, 2);
-        (self[26], self[24]) = delta_exchange(self[26], self[24], mask, 2);
-        (self[27], self[25]) = delta_exchange(self[27], self[25], mask, 2);
-        (self[30], self[28]) = delta_exchange(self[30], self[28], mask, 2);
-        (self[31], self[29]) = delta_exchange(self[31], self[29], mask, 2);
+        (c, a) = delta_exchange(c, a, MASK1, 8);
+        (d, b) = delta_exchange(d, b, MASK1, 8);
+        (g, e) = delta_exchange(g, e, MASK1, 8);
+        (h, f) = delta_exchange(h, f, MASK1, 8);
 
-        let mask = 0x55555555;
-        (self[1], self[0]) = delta_exchange(self[1], self[0], mask, 1);
-        (self[3], self[2]) = delta_exchange(self[3], self[2], mask, 1);
-        (self[5], self[4]) = delta_exchange(self[5], self[4], mask, 1);
-        (self[7], self[6]) = delta_exchange(self[7], self[6], mask, 1);
-        (self[9], self[8]) = delta_exchange(self[9], self[8], mask, 1);
-        (self[11], self[10]) = delta_exchange(self[11], self[10], mask, 1);
-        (self[13], self[12]) = delta_exchange(self[13], self[12], mask, 1);
-        (self[15], self[14]) = delta_exchange(self[15], self[14], mask, 1);
-        (self[17], self[16]) = delta_exchange(self[17], self[16], mask, 1);
-        (self[19], self[18]) = delta_exchange(self[19], self[18], mask, 1);
-        (self[21], self[20]) = delta_exchange(self[21], self[20], mask, 1);
-        (self[23], self[22]) = delta_exchange(self[23], self[22], mask, 1);
-        (self[25], self[24]) = delta_exchange(self[25], self[24], mask, 1);
-        (self[27], self[26]) = delta_exchange(self[27], self[26], mask, 1);
-        (self[29], self[28]) = delta_exchange(self[29], self[28], mask, 1);
-        (self[31], self[30]) = delta_exchange(self[31], self[30], mask, 1);
+        (b, a) = delta_exchange(b, a, MASK2, 4);
+        (d, c) = delta_exchange(d, c, MASK2, 4);
+        (f, e) = delta_exchange(f, e, MASK2, 4);
+        (h, g) = delta_exchange(h, g, MASK2, 4);
+
+        a = delta_swap(a, MASK3, 31);
+        b = delta_swap(b, MASK3, 31);
+        c = delta_swap(c, MASK3, 31);
+        d = delta_swap(d, MASK3, 31);
+        e = delta_swap(e, MASK3, 31);
+        f = delta_swap(f, MASK3, 31);
+        g = delta_swap(g, MASK3, 31);
+        h = delta_swap(h, MASK3, 31);
+
+        a = delta_swap(a, MASK4, 62);
+        b = delta_swap(b, MASK4, 62);
+        c = delta_swap(c, MASK4, 62);
+        d = delta_swap(d, MASK4, 62);
+        e = delta_swap(e, MASK4, 62);
+        f = delta_swap(f, MASK4, 62);
+        g = delta_swap(g, MASK4, 62);
+        h = delta_swap(h, MASK4, 62);
+
+        // Read the result back into the matrix.
+        unsafe { ptr.write_unaligned([a, b, c, d, e, f, g, h]) };
     }
 }
 
