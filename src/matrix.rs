@@ -710,36 +710,6 @@ impl BitMatrix for [u16; 16] {
 
         let ptr: *mut Self = res.as_mut_ptr().cast();
         unsafe { ptr.read() }
-
-        // The following is an alternative implementation using the four russians algorithm.
-
-        // const STRIPE_BITS: usize = 4;
-        // const SUM_TABLE_LEN: usize = 1 << STRIPE_BITS;
-        // const STRIPE_INDEX: [usize; SUM_TABLE_LEN] = stripe_index();
-        // const ROW_SUM_INDEX: [usize; SUM_TABLE_LEN] = row_sum_index();
-
-        // let mut sums = [0; SUM_TABLE_LEN];
-        // let mut result = [0; Self::SIZE];
-        // let mut mask = (1 << STRIPE_BITS) - 1;
-        // let mut shift = 0;
-        // while mask != 0 {
-        //     let range = shift..(shift + STRIPE_BITS).min(Self::SIZE);
-        //     let stripe = &rhs[range];
-        //     sums[0] = 0;
-        //     for i in 1..SUM_TABLE_LEN {
-        //         let j = STRIPE_INDEX[i];
-        //         sums[i] = sums[i - 1] ^ stripe[j];
-        //     }
-
-        //     for (i, row) in self.iter().enumerate() {
-        //         let prefix = ((row & mask) >> shift) as usize;
-        //         let j = ROW_SUM_INDEX[prefix];
-        //         result[i] ^= sums[j];
-        //     }
-        //     mask <<= STRIPE_BITS;
-        //     shift += STRIPE_BITS;
-        // }
-        // result
     }
 
     fn reverse_rows(&mut self) {
@@ -1064,8 +1034,8 @@ impl BitMatrix for [u64; 64] {
 
     fn matmul(self, rhs: Self) -> Self {
         // The commented code below is an implementation of the Strassen algorithm for 64x64 bit
-        // matrices. In it's current form it is much slower than the four russians
-        // algorithm, but it is included for reference.
+        // matrices. In it's current form it is much slower than the four russians algorithm, but it
+        // is included for reference.
 
         // let a00: [u32; 32] = array::from_fn(|i| self[i]  as u32);
         // let a01: [u32; 32] = array::from_fn(|i| (self[i] >> 32) as u32);
