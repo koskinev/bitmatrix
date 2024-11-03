@@ -946,12 +946,12 @@ impl BitMatrix for [u64; 64] {
         let mut result = [0; Self::SIZE];
         let mut mask = (1 << STRIPE_BITS) - 1;
         let mut shift = 0;
-        for _ in 0..(Self::SIZE / STRIPE_BITS) {
+        for _ in 0..((Self::SIZE + STRIPE_BITS - 1)/ STRIPE_BITS) {
             let range = shift..(shift + STRIPE_BITS).min(Self::SIZE);
             let stripe = &rhs[range];
             for i in 1..SUM_TABLE_LEN {
                 let j = STRIPE_INDEX[i];
-                sums[i] = sums[i-1] ^ stripe.get(j).unwrap_or(&0);
+                sums[i] = sums[i - 1] ^ stripe.get(j).unwrap_or(&0);
             }
 
             for (i, row) in self.iter().enumerate() {
