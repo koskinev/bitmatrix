@@ -43,10 +43,46 @@ where
     /// The type used to represent a row in the matrix.
     type RowRepr: BitOps;
 
-    /// Performs a bitwise AND operation with another matrix.
+    /// Performs a bitwise AND operation with another matrix. Returns a new matrix where each bit is
+    /// the logical AND of the corresponding bits in `self` and `rhs`.
     ///
-    /// Returns a new matrix where each bit is the logical AND of the corresponding bits in `self`
-    /// and `rhs`.
+    /// ```
+    /// use bitmatrix::BitMatrix;
+    ///
+    /// let a = [
+    ///     0b_1_1_1_1_1_1_1_1,
+    ///     0b_0_1_1_1_1_1_1_1,
+    ///     0b_0_0_1_1_1_1_1_1,
+    ///     0b_0_0_0_1_1_1_1_1,
+    ///     0b_0_0_0_0_1_1_1_1,
+    ///     0b_0_0_0_0_0_1_1_1,
+    ///     0b_0_0_0_0_0_0_1_1,
+    ///     0b_0_0_0_0_0_0_0_1,
+    /// ];
+    /// let b = [
+    ///     0b_0_0_0_0_0_0_0_1,
+    ///     0b_0_0_0_0_0_0_1_1,
+    ///     0b_0_0_0_0_0_1_1_1,
+    ///     0b_0_0_0_0_1_1_1_1,
+    ///     0b_0_0_0_1_1_1_1_1,
+    ///     0b_0_0_1_1_1_1_1_1,
+    ///     0b_0_1_1_1_1_1_1_1,
+    ///     0b_1_1_1_1_1_1_1_1,
+    /// ];
+    /// assert_eq!(
+    ///     a.and(b),
+    ///     [
+    ///         0b_0_0_0_0_0_0_0_1,
+    ///         0b_0_0_0_0_0_0_1_1,
+    ///         0b_0_0_0_0_0_1_1_1,
+    ///         0b_0_0_0_0_1_1_1_1,
+    ///         0b_0_0_0_0_1_1_1_1,
+    ///         0b_0_0_0_0_0_1_1_1,
+    ///         0b_0_0_0_0_0_0_1_1,
+    ///         0b_0_0_0_0_0_0_0_1,
+    ///     ]
+    /// );
+    /// ```
     fn and(self, rhs: Self) -> Self {
         self.zip(&rhs, |a, b| a & b)
     }
@@ -89,6 +125,35 @@ where
     fn get(&self, row: usize, col: usize) -> u8;
 
     /// Applies a function to each row in the matrix and returns the result.
+    /// ```
+    /// use bitmatrix::BitMatrix;
+    ///
+    /// let matrix: [u8; 8] = [
+    ///     0b_1_1_1_1_1_1_1_1,
+    ///     0b_0_1_1_1_1_1_1_1,
+    ///     0b_0_0_1_1_1_1_1_1,
+    ///     0b_0_0_0_1_1_1_1_1,
+    ///     0b_0_0_0_0_1_1_1_1,
+    ///     0b_0_0_0_0_0_1_1_1,
+    ///     0b_0_0_0_0_0_0_1_1,
+    ///     0b_0_0_0_0_0_0_0_1,
+    /// ];
+    /// let negated = matrix.map(|row| !row);
+    ///
+    /// assert_eq!(
+    ///     negated,
+    ///     [
+    ///         0b_0_0_0_0_0_0_0_0,
+    ///         0b_1_0_0_0_0_0_0_0,
+    ///         0b_1_1_0_0_0_0_0_0,
+    ///         0b_1_1_1_0_0_0_0_0,
+    ///         0b_1_1_1_1_0_0_0_0,
+    ///         0b_1_1_1_1_1_0_0_0,
+    ///         0b_1_1_1_1_1_1_0_0,
+    ///         0b_1_1_1_1_1_1_1_0,
+    ///     ]
+    /// );
+    /// ```
     fn map<F>(&self, f: F) -> Self
     where
         F: FnMut(Self::RowRepr) -> Self::RowRepr;
@@ -118,10 +183,45 @@ where
         self.map(|row| !row)
     }
 
-    /// Performs a bitwise OR operation with another matrix.
+    /// Performs a bitwise OR operation with another matrix. Returns a new matrix where each bit is
+    /// the logical OR of the corresponding bits in `self` and `rhs`.
+    /// ```
+    /// use bitmatrix::BitMatrix;
     ///
-    /// Returns a new matrix where each bit is the logical OR of the corresponding bits in `self`
-    /// and `rhs`.
+    /// let a = [
+    ///     0b_1_1_1_1_1_1_1_1,
+    ///     0b_0_1_1_1_1_1_1_1,
+    ///     0b_0_0_1_1_1_1_1_1,
+    ///     0b_0_0_0_1_1_1_1_1,
+    ///     0b_0_0_0_0_1_1_1_1,
+    ///     0b_0_0_0_0_0_1_1_1,
+    ///     0b_0_0_0_0_0_0_1_1,
+    ///     0b_0_0_0_0_0_0_0_1,
+    /// ];
+    /// let b = [
+    ///     0b_0_0_0_0_0_0_0_1,
+    ///     0b_0_0_0_0_0_0_1_1,
+    ///     0b_0_0_0_0_0_1_1_1,
+    ///     0b_0_0_0_0_1_1_1_1,
+    ///     0b_0_0_0_1_1_1_1_1,
+    ///     0b_0_0_1_1_1_1_1_1,
+    ///     0b_0_1_1_1_1_1_1_1,
+    ///     0b_1_1_1_1_1_1_1_1,
+    /// ];
+    /// assert_eq!(
+    ///     a.or(b),
+    ///     [
+    ///         0b_1_1_1_1_1_1_1_1,
+    ///         0b_0_1_1_1_1_1_1_1,
+    ///         0b_0_0_1_1_1_1_1_1,
+    ///         0b_0_0_0_1_1_1_1_1,
+    ///         0b_0_0_0_1_1_1_1_1,
+    ///         0b_0_0_1_1_1_1_1_1,
+    ///         0b_0_1_1_1_1_1_1_1,
+    ///         0b_1_1_1_1_1_1_1_1,
+    ///     ]
+    /// );
+    /// ```
     fn or(self, rhs: Self) -> Self
     where
         Self: Copy,
@@ -290,25 +390,85 @@ where
     /// ```
     fn transpose(&mut self);
 
-    /// Returns a transposed copy of the matrix.
+    /// Returns a transposed copy of the matrix. See [`transpose`](#method.transpose) for an
+    /// in-place version and more information.
     fn transposed(&self) -> Self {
         let mut mat = *self;
         mat.transpose();
         mat
     }
 
-    /// Performs a bitwise XOR operation with another matrix.
+    /// Performs a bitwise XOR operation with another matrix. Returns a new matrix where each bit is
+    /// the logical XOR of the corresponding bits in `self` and `rhs`.
+    /// ```
+    /// use bitmatrix::BitMatrix;
     ///
-    /// Returns a new matrix where each bit is the logical XOR of the corresponding bits in `self`
-    /// and `rhs`.
+    /// let a = [
+    ///     0b_1_1_1_1_1_1_1_1,
+    ///     0b_0_1_1_1_1_1_1_1,
+    ///     0b_0_0_1_1_1_1_1_1,
+    ///     0b_0_0_0_1_1_1_1_1,
+    ///     0b_0_0_0_0_1_1_1_1,
+    ///     0b_0_0_0_0_0_1_1_1,
+    ///     0b_0_0_0_0_0_0_1_1,
+    ///     0b_0_0_0_0_0_0_0_1,
+    /// ];
+    /// let b = [
+    ///     0b_0_0_0_0_0_0_0_1,
+    ///     0b_0_0_0_0_0_0_1_1,
+    ///     0b_0_0_0_0_0_1_1_1,
+    ///     0b_0_0_0_0_1_1_1_1,
+    ///     0b_0_0_0_1_1_1_1_1,
+    ///     0b_0_0_1_1_1_1_1_1,
+    ///     0b_0_1_1_1_1_1_1_1,
+    ///     0b_1_1_1_1_1_1_1_1,
+    /// ];
+    /// assert_eq!(
+    ///     a.xor(b),
+    ///     [
+    ///         0b_1_1_1_1_1_1_1_0,
+    ///         0b_0_1_1_1_1_1_0_0,
+    ///         0b_0_0_1_1_1_0_0_0,
+    ///         0b_0_0_0_1_0_0_0_0,
+    ///         0b_0_0_0_1_0_0_0_0,
+    ///         0b_0_0_1_1_1_0_0_0,
+    ///         0b_0_1_1_1_1_1_0_0,
+    ///         0b_1_1_1_1_1_1_1_0,
+    ///     ]
+    /// );
+    /// ```    
     fn xor(self, rhs: Self) -> Self {
         self.zip(&rhs, |a, b| a ^ b)
     }
 
-    /// Applies a function to corresponding elements of two matrices.
+    /// Applies a function to corresponding elements of two matrices. Returns a new matrix where
+    /// each row is the result of applying the function `f` to the corresponding rows of `self`
+    /// and `rhs`.
+    /// ```
+    /// use bitmatrix::BitMatrix;
     ///
-    /// Returns a new matrix where each row is the result of applying the function `f` to the
-    /// corresponding rows of `self` and `rhs`.
+    /// let a = [
+    ///     0b_1_1_1_1_1_1_1_1,
+    ///     0b_0_1_1_1_1_1_1_1,
+    ///     0b_0_0_1_1_1_1_1_1,
+    ///     0b_0_0_0_1_1_1_1_1,
+    ///     0b_0_0_0_0_1_1_1_1,
+    ///     0b_0_0_0_0_0_1_1_1,
+    ///     0b_0_0_0_0_0_0_1_1,
+    ///     0b_0_0_0_0_0_0_0_1,
+    /// ];
+    /// let b = [
+    ///     0b_0_0_0_0_0_0_0_1,
+    ///     0b_0_0_0_0_0_0_1_1,
+    ///     0b_0_0_0_0_0_1_1_1,
+    ///     0b_0_0_0_0_1_1_1_1,
+    ///     0b_0_0_0_1_1_1_1_1,
+    ///     0b_0_0_1_1_1_1_1_1,
+    ///     0b_0_1_1_1_1_1_1_1,
+    ///     0b_1_1_1_1_1_1_1_1,
+    /// ];
+    /// assert_eq!(a.zip(&b, |a, b| a & b), a.and(b));
+    /// ```
     fn zip<F>(&self, rhs: &Self, f: F) -> Self
     where
         F: FnMut(Self::RowRepr, Self::RowRepr) -> Self::RowRepr;
@@ -946,7 +1106,7 @@ impl BitMatrix for [u64; 64] {
         let mut result = [0; Self::SIZE];
         let mut mask = (1 << STRIPE_BITS) - 1;
         let mut shift = 0;
-        for _ in 0..((Self::SIZE + STRIPE_BITS - 1)/ STRIPE_BITS) {
+        for _ in 0..((Self::SIZE + STRIPE_BITS - 1) / STRIPE_BITS) {
             let range = shift..(shift + STRIPE_BITS).min(Self::SIZE);
             let stripe = &rhs[range];
             for i in 1..SUM_TABLE_LEN {
