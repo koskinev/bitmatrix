@@ -1,12 +1,35 @@
 #[cfg(test)]
 mod tests;
 
-mod utils;
+use std::{
+    array,
+    ops::{
+        BitAnd, BitAndAssign, BitOr, BitOrAssign, BitXor, BitXorAssign, Not, Shl, ShlAssign, Shr,
+        ShrAssign,
+    },
+};
 
-use utils::{delta_exchange, delta_swap, row_sum_index, stripe_index};
+pub trait BitOps
+where
+    Self: Copy + PartialEq + Eq + PartialOrd + Ord,
+    Self: BitAnd<Output = Self> + BitOr<Output = Self> + BitXor<Output = Self> + Not<Output = Self>,
+    Self: BitAndAssign + BitOrAssign + BitXorAssign,
+    Self: Shl<u32, Output = Self> + Shr<u32, Output = Self>,
+    Self: ShlAssign<u32> + ShrAssign<u32>,
+{
+}
+
+impl BitOps for u8 {}
+impl BitOps for u16 {}
+impl BitOps for u32 {}
+impl BitOps for u64 {}
+impl BitOps for u128 {}
 
 /// A trait for bit matrices.
-pub trait BitMatrix {
+pub trait BitMatrix
+where
+    Self: Copy,
+{
     /// The number of rows and columns in the matrix.
     const SIZE: usize;
 
@@ -18,7 +41,15 @@ pub trait BitMatrix {
     const ZERO: Self;
 
     /// The type used to represent a row in the matrix.
-    type RowRepr;
+    type RowRepr: BitOps;
+
+    /// Performs a bitwise AND operation with another matrix.
+    ///
+    /// Returns a new matrix where each bit is the logical AND of the corresponding bits in `self`
+    /// and `rhs`.
+    fn and(self, rhs: Self) -> Self {
+        self.zip(&rhs, |a, b| a & b)
+    }
 
     /// Returns the number of ´1´-bits in the matrix.
     /// ```
@@ -57,6 +88,11 @@ pub trait BitMatrix {
     /// ```
     fn get(&self, row: usize, col: usize) -> u8;
 
+    /// Applies a function to each row in the matrix and returns the result.
+    fn map<F>(&self, f: F) -> Self
+    where
+        F: FnMut(Self::RowRepr) -> Self::RowRepr;
+
     /// Multiplies the matrix by `rhs`.
     ///
     /// ```
@@ -76,6 +112,23 @@ pub trait BitMatrix {
     /// assert_eq!(matrix.matmul(M::IDENTITY), matrix);
     /// ```
     fn matmul(self, rhs: Self) -> Self;
+
+    /// Returns a matrix where each bit is the logical negation of the corresponding bit in `self`.
+    fn not(self) -> Self {
+        self.map(|row| !row)
+    }
+
+    /// Performs a bitwise OR operation with another matrix.
+    ///
+    /// Returns a new matrix where each bit is the logical OR of the corresponding bits in `self`
+    /// and `rhs`.
+    fn or(self, rhs: Self) -> Self
+    where
+        Self: Copy,
+        Self::RowRepr: BitOr<Output = Self::RowRepr>,
+    {
+        self.zip(&rhs, |a, b| a | b)
+    }
 
     /// Reverses the order of the rows.
     /// ```
@@ -238,14 +291,27 @@ pub trait BitMatrix {
     fn transpose(&mut self);
 
     /// Returns a transposed copy of the matrix.
-    fn transposed(&self) -> Self
-    where
-        Self: Copy,
-    {
+    fn transposed(&self) -> Self {
         let mut mat = *self;
         mat.transpose();
         mat
     }
+
+    /// Performs a bitwise XOR operation with another matrix.
+    ///
+    /// Returns a new matrix where each bit is the logical XOR of the corresponding bits in `self`
+    /// and `rhs`.
+    fn xor(self, rhs: Self) -> Self {
+        self.zip(&rhs, |a, b| a ^ b)
+    }
+
+    /// Applies a function to corresponding elements of two matrices.
+    ///
+    /// Returns a new matrix where each row is the result of applying the function `f` to the
+    /// corresponding rows of `self` and `rhs`.
+    fn zip<F>(&self, rhs: &Self, f: F) -> Self
+    where
+        F: FnMut(Self::RowRepr, Self::RowRepr) -> Self::RowRepr;
 }
 
 impl BitMatrix for [u8; 8] {
@@ -338,6 +404,13 @@ impl BitMatrix for [u8; 8] {
         result.to_ne_bytes()
     }
 
+    fn map<F>(&self, mut f: F) -> Self
+    where
+        F: FnMut(Self::RowRepr) -> Self::RowRepr,
+    {
+        array::from_fn(|i| f(self[i]))
+    }
+
     fn reverse_rows(&mut self) {
         self.reverse();
     }
@@ -387,12 +460,18 @@ impl BitMatrix for [u8; 8] {
         // 76543210  10101010  e6c4a280  11001100  skc4og80 11110000  UMEwog80
 
         let mut res = u64::from_ne_bytes(*self);
-        let t = ((res >> 7) ^ res) & 0x00AA00AA00AA00AA;
-        res = (res ^ t) ^ (t << 7);
-        let t = ((res >> 14) ^ res) & 0x0000CCCC0000CCCC;
-        res = (res ^ t) ^ (t << 14);
-        let t = ((res >> 28) ^ res) & 0x00000000F0F0F0F0;
-        res = (res ^ t) ^ (t << 28);
+
+        macro_rules! delta_swap {
+            ($mask:expr, $shift:literal) => {
+                let t = ((res >> $shift) ^ res) & $mask;
+                res = (res ^ t) ^ (t << $shift);
+            };
+        }
+
+        delta_swap!(0x00AA00AA00AA00AA, 7);
+        delta_swap!(0x0000CCCC0000CCCC, 14);
+        delta_swap!(0x00000000F0F0F0F0, 28);
+
         *self = res.to_ne_bytes();
 
         // Below is an alternative implementation adapted from Hacker's Delight 2nd ed.
@@ -409,6 +488,14 @@ impl BitMatrix for [u8; 8] {
         //     | (res & 0x00000000F0F0F0F0) << 28
         //     | (res >> 28) & 0x00000000F0F0F0F0;
         // *self = res.to_ne_bytes();
+    }
+
+    fn zip<F>(&self, rhs: &Self, mut f: F) -> Self
+    where
+        F: FnMut(Self::RowRepr, Self::RowRepr) -> Self::RowRepr,
+        Self: Copy,
+    {
+        array::from_fn(|i| f(self[i], rhs[i]))
     }
 }
 
@@ -439,6 +526,13 @@ impl BitMatrix for [u16; 16] {
         ((self[row] >> col) & 1) as u8
     }
 
+    fn map<F>(&self, mut f: F) -> Self
+    where
+        F: FnMut(Self::RowRepr) -> Self::RowRepr,
+    {
+        array::from_fn(|i| f(self[i]))
+    }
+
     fn matmul(mut self, rhs: Self) -> Self {
         // Read the matrix into four 64-bit integers, each containing four rows of the matrix.
         let this = unsafe { self.as_mut_ptr().cast::<[u64; 4]>().read_unaligned() };
@@ -446,24 +540,13 @@ impl BitMatrix for [u16; 16] {
 
         const COL: u64 = 0x0001000100010001;
 
-        for k in 0..4 {
-            res[k] ^= (COL & this[k]) * rhs[0] as u64;
-            res[k] ^= (COL & (this[k] >> 1)) * rhs[1] as u64;
-            res[k] ^= (COL & (this[k] >> 2)) * rhs[2] as u64;
-            res[k] ^= (COL & (this[k] >> 3)) * rhs[3] as u64;
-            res[k] ^= (COL & (this[k] >> 4)) * rhs[4] as u64;
-            res[k] ^= (COL & (this[k] >> 5)) * rhs[5] as u64;
-            res[k] ^= (COL & (this[k] >> 6)) * rhs[6] as u64;
-            res[k] ^= (COL & (this[k] >> 7)) * rhs[7] as u64;
-            res[k] ^= (COL & (this[k] >> 8)) * rhs[8] as u64;
-            res[k] ^= (COL & (this[k] >> 9)) * rhs[9] as u64;
-            res[k] ^= (COL & (this[k] >> 10)) * rhs[10] as u64;
-            res[k] ^= (COL & (this[k] >> 11)) * rhs[11] as u64;
-            res[k] ^= (COL & (this[k] >> 12)) * rhs[12] as u64;
-            res[k] ^= (COL & (this[k] >> 13)) * rhs[13] as u64;
-            res[k] ^= (COL & (this[k] >> 14)) * rhs[14] as u64;
-            res[k] ^= (COL & (this[k] >> 15)) * rhs[15] as u64;
-        }
+        (0..16).for_each(|k| {
+            let row = rhs[k] as u64;
+            res[0] ^= (COL & (this[0]) >> k) * row;
+            res[1] ^= (COL & (this[1]) >> k) * row;
+            res[2] ^= (COL & (this[2]) >> k) * row;
+            res[3] ^= (COL & (this[3]) >> k) * row;
+        });
 
         let ptr: *mut Self = res.as_mut_ptr().cast();
         unsafe { ptr.read() }
@@ -544,7 +627,22 @@ impl BitMatrix for [u16; 16] {
     fn transpose(&mut self) {
         // Read the matrix into four 64-bit integers, each containing four rows of the matrix.
         let ptr: *mut [u64; 4] = self.as_mut_ptr().cast();
-        let [mut a, mut b, mut c, mut d] = unsafe { ptr.read_unaligned() };
+        let mut res = unsafe { ptr.read_unaligned() };
+
+        macro_rules! delta_exchange {
+            ($a:literal, $b:literal, $mask:expr, $shift:literal) => {
+                let t = ((res[$b] >> $shift) ^ res[$a]) & $mask;
+                res[$a] ^= t;
+                res[$b] ^= t << $shift;
+            };
+        }
+
+        macro_rules! delta_swap {
+            ($i:expr, $mask:expr, $shift:literal) => {
+                let t = ((res[$i] >> $shift) ^ res[$i]) & $mask;
+                res[$i] = (res[$i] ^ t) ^ (t << $shift);
+            };
+        }
 
         // The strategy is to first swap bits between `a`, `b`, `c`, and `d` so that each contains
         // the bits of corresponding block of the transposed matrix, but not in the correct
@@ -556,23 +654,31 @@ impl BitMatrix for [u16; 16] {
         const MASK2: u64 = 0x0000AAAA0000AAAA;
         const MASK3: u64 = 0x00000000CCCCCCCC;
 
-        (c, a) = delta_exchange(c, a, MASK0, 8);
-        (d, b) = delta_exchange(d, b, MASK0, 8);
-        (b, a) = delta_exchange(b, a, MASK1, 4);
-        (d, c) = delta_exchange(d, c, MASK1, 4);
+        delta_exchange!(2, 0, MASK0, 8);
+        delta_exchange!(3, 1, MASK0, 8);
+        delta_exchange!(1, 0, MASK1, 4);
+        delta_exchange!(3, 2, MASK1, 4);
 
         // The following code performs the second step.
-        a = delta_swap(a, MASK2, 15);
-        b = delta_swap(b, MASK2, 15);
-        c = delta_swap(c, MASK2, 15);
-        d = delta_swap(d, MASK2, 15);
-        a = delta_swap(a, MASK3, 30);
-        b = delta_swap(b, MASK3, 30);
-        c = delta_swap(c, MASK3, 30);
-        d = delta_swap(d, MASK3, 30);
+        delta_swap!(0, MASK2, 15);
+        delta_swap!(1, MASK2, 15);
+        delta_swap!(2, MASK2, 15);
+        delta_swap!(3, MASK2, 15);
+        delta_swap!(0, MASK3, 30);
+        delta_swap!(1, MASK3, 30);
+        delta_swap!(2, MASK3, 30);
+        delta_swap!(3, MASK3, 30);
 
         // Read the result back into the matrix.
-        unsafe { ptr.write_unaligned([a, b, c, d]) };
+        unsafe { ptr.write_unaligned(res) };
+    }
+
+    fn zip<F>(&self, rhs: &Self, mut f: F) -> Self
+    where
+        F: FnMut(Self::RowRepr, Self::RowRepr) -> Self::RowRepr,
+        Self: Copy,
+    {
+        array::from_fn(|i| f(self[i], rhs[i]))
     }
 }
 
@@ -603,34 +709,42 @@ impl BitMatrix for [u32; 32] {
         ((self[row] >> col) & 1) as u8
     }
 
-    fn matmul(self, rhs: Self) -> Self {
-        const STRIPE_BITS: usize = 4;
-        const SUM_TABLE_LEN: usize = 1 << STRIPE_BITS;
-        const STRIPE_INDEX: [usize; SUM_TABLE_LEN] = stripe_index();
-        const ROW_SUM_INDEX: [usize; SUM_TABLE_LEN] = row_sum_index();
+    fn map<F>(&self, mut f: F) -> Self
+    where
+        F: FnMut(Self::RowRepr) -> Self::RowRepr,
+    {
+        array::from_fn(|i| f(self[i]))
+    }
 
-        let mut sums = [0; SUM_TABLE_LEN];
-        let mut result = [0; Self::SIZE];
-        let mut mask = (1 << STRIPE_BITS) - 1;
-        let mut shift = 0;
-        while mask != 0 {
-            let range = shift..(shift + STRIPE_BITS).min(Self::SIZE);
-            let stripe = &rhs[range];
-            sums[0] = 0;
-            for i in 1..SUM_TABLE_LEN {
-                let j = STRIPE_INDEX[i];
-                sums[i] = sums[i - 1] ^ stripe[j];
-            }
+    fn matmul(mut self, rhs: Self) -> Self {
+        // Read the matrix into four 64-bit integers, each containing four rows of the matrix.
+        let this = unsafe { self.as_mut_ptr().cast::<[u64; 16]>().read_unaligned() };
+        let mut res: [u64; 16] = [0; 16];
 
-            for (i, row) in self.iter().enumerate() {
-                let prefix = ((row & mask) >> shift) as usize;
-                let j = ROW_SUM_INDEX[prefix];
-                result[i] ^= sums[j];
-            }
-            mask <<= STRIPE_BITS;
-            shift += STRIPE_BITS;
-        }
-        result
+        const COL: u64 = 0x0000000100000001;
+
+        (0..32).for_each(|k| {
+            let row = rhs[k] as u64;
+            res[0] ^= (COL & (this[0]) >> k) * row;
+            res[1] ^= (COL & (this[1]) >> k) * row;
+            res[2] ^= (COL & (this[2]) >> k) * row;
+            res[3] ^= (COL & (this[3]) >> k) * row;
+            res[4] ^= (COL & (this[4]) >> k) * row;
+            res[5] ^= (COL & (this[5]) >> k) * row;
+            res[6] ^= (COL & (this[6]) >> k) * row;
+            res[7] ^= (COL & (this[7]) >> k) * row;
+            res[8] ^= (COL & (this[8]) >> k) * row;
+            res[9] ^= (COL & (this[9]) >> k) * row;
+            res[10] ^= (COL & (this[10]) >> k) * row;
+            res[11] ^= (COL & (this[11]) >> k) * row;
+            res[12] ^= (COL & (this[12]) >> k) * row;
+            res[13] ^= (COL & (this[13]) >> k) * row;
+            res[14] ^= (COL & (this[14]) >> k) * row;
+            res[15] ^= (COL & (this[15]) >> k) * row;
+        });
+
+        let ptr: *mut Self = res.as_mut_ptr().cast();
+        unsafe { ptr.read() }
     }
 
     fn reverse_rows(&mut self) {
@@ -677,51 +791,80 @@ impl BitMatrix for [u32; 32] {
 
     fn transpose(&mut self) {
         // Read the matrix into 8 128-bit integers, each containing four rows of the matrix.
-        let ptr: *mut [u128; 8] = self.as_mut_ptr().cast();
-        let [mut a, mut b, mut c, mut d, mut e, mut f, mut g, mut h] =
-            unsafe { ptr.read_unaligned() };
+        let ptr: *mut [u64; 16] = self.as_mut_ptr().cast();
+        let mut res = unsafe { ptr.read_unaligned() };
 
-        const MASK0: u128 = 0x0000FFFF0000FFFF0000FFFF0000FFFF;
-        const MASK1: u128 = 0x00FF00FF00FF00FF00FF00FF00FF00FF;
-        const MASK2: u128 = 0x0F0F0F0F0F0F0F0F0F0F0F0F0F0F0F0F;
-        const MASK3: u128 = 0x00000000AAAAAAAA00000000AAAAAAAA;
-        const MASK4: u128 = 0x0000000000000000CCCCCCCCCCCCCCCC;
+        macro_rules! delta_exchange {
+            ($a:expr, $b:expr, $mask:expr, $shift:literal) => {
+                let t = ((res[$b] >> $shift) ^ res[$a]) & $mask;
+                res[$a] ^= t;
+                res[$b] ^= t << $shift;
+            };
+        }
 
-        (e, a) = delta_exchange(e, a, MASK0, 16);
-        (f, b) = delta_exchange(f, b, MASK0, 16);
-        (g, c) = delta_exchange(g, c, MASK0, 16);
-        (h, d) = delta_exchange(h, d, MASK0, 16);
+        macro_rules! delta_swap {
+            ($i:expr, $mask:expr, $shift:literal) => {
+                let t = ((res[$i] >> $shift) ^ res[$i]) & $mask;
+                res[$i] = (res[$i] ^ t) ^ (t << $shift);
+            };
+        }
 
-        (c, a) = delta_exchange(c, a, MASK1, 8);
-        (d, b) = delta_exchange(d, b, MASK1, 8);
-        (g, e) = delta_exchange(g, e, MASK1, 8);
-        (h, f) = delta_exchange(h, f, MASK1, 8);
+        const MASK0: u64 = 0x0000FFFF0000FFFF;
+        const MASK1: u64 = 0x00FF00FF00FF00FF;
+        const MASK2: u64 = 0x0F0F0F0F0F0F0F0F;
+        const MASK3: u64 = 0x3333333333333333;
+        const MASK4: u64 = 0x00000000AAAAAAAA;
 
-        (b, a) = delta_exchange(b, a, MASK2, 4);
-        (d, c) = delta_exchange(d, c, MASK2, 4);
-        (f, e) = delta_exchange(f, e, MASK2, 4);
-        (h, g) = delta_exchange(h, g, MASK2, 4);
+        delta_exchange!(8, 0, MASK0, 16);
+        delta_exchange!(9, 1, MASK0, 16);
+        delta_exchange!(10, 2, MASK0, 16);
+        delta_exchange!(11, 3, MASK0, 16);
+        delta_exchange!(12, 4, MASK0, 16);
+        delta_exchange!(13, 5, MASK0, 16);
+        delta_exchange!(14, 6, MASK0, 16);
+        delta_exchange!(15, 7, MASK0, 16);
 
-        a = delta_swap(a, MASK3, 31);
-        b = delta_swap(b, MASK3, 31);
-        c = delta_swap(c, MASK3, 31);
-        d = delta_swap(d, MASK3, 31);
-        e = delta_swap(e, MASK3, 31);
-        f = delta_swap(f, MASK3, 31);
-        g = delta_swap(g, MASK3, 31);
-        h = delta_swap(h, MASK3, 31);
+        delta_exchange!(4, 0, MASK1, 8);
+        delta_exchange!(5, 1, MASK1, 8);
+        delta_exchange!(6, 2, MASK1, 8);
+        delta_exchange!(7, 3, MASK1, 8);
+        delta_exchange!(12, 8, MASK1, 8);
+        delta_exchange!(13, 9, MASK1, 8);
+        delta_exchange!(14, 10, MASK1, 8);
+        delta_exchange!(15, 11, MASK1, 8);
 
-        a = delta_swap(a, MASK4, 62);
-        b = delta_swap(b, MASK4, 62);
-        c = delta_swap(c, MASK4, 62);
-        d = delta_swap(d, MASK4, 62);
-        e = delta_swap(e, MASK4, 62);
-        f = delta_swap(f, MASK4, 62);
-        g = delta_swap(g, MASK4, 62);
-        h = delta_swap(h, MASK4, 62);
+        delta_exchange!(2, 0, MASK2, 4);
+        delta_exchange!(3, 1, MASK2, 4);
+        delta_exchange!(6, 4, MASK2, 4);
+        delta_exchange!(7, 5, MASK2, 4);
+        delta_exchange!(10, 8, MASK2, 4);
+        delta_exchange!(11, 9, MASK2, 4);
+        delta_exchange!(14, 12, MASK2, 4);
+        delta_exchange!(15, 13, MASK2, 4);
+
+        delta_exchange!(1, 0, MASK3, 2);
+        delta_exchange!(3, 2, MASK3, 2);
+        delta_exchange!(5, 4, MASK3, 2);
+        delta_exchange!(7, 6, MASK3, 2);
+        delta_exchange!(9, 8, MASK3, 2);
+        delta_exchange!(11, 10, MASK3, 2);
+        delta_exchange!(13, 12, MASK3, 2);
+        delta_exchange!(15, 14, MASK3, 2);
+
+        (0..16).for_each(|k| {
+            delta_swap!(k, MASK4, 31);
+        });
 
         // Read the result back into the matrix.
-        unsafe { ptr.write_unaligned([a, b, c, d, e, f, g, h]) };
+        unsafe { ptr.write_unaligned(res) };
+    }
+
+    fn zip<F>(&self, rhs: &Self, mut f: F) -> Self
+    where
+        F: FnMut(Self::RowRepr, Self::RowRepr) -> Self::RowRepr,
+        Self: Copy,
+    {
+        array::from_fn(|i| f(self[i], rhs[i]))
     }
 }
 
@@ -752,23 +895,63 @@ impl BitMatrix for [u64; 64] {
         ((self[row] >> col) & 1) as u8
     }
 
+    fn map<F>(&self, mut f: F) -> Self
+    where
+        F: FnMut(Self::RowRepr) -> Self::RowRepr,
+    {
+        array::from_fn(|i| f(self[i]))
+    }
+
     fn matmul(self, rhs: Self) -> Self {
-        const STRIPE_BITS: usize = 4;
+        // The commented code below is an implementation of the Strassen algorithm for 64x64 bit
+        // matrices. In it's current form it is much slower than the four russians
+        // algorithm, but it is included for reference.
+
+        // let a00: [u32; 32] = array::from_fn(|i| self[i]  as u32);
+        // let a01: [u32; 32] = array::from_fn(|i| (self[i] >> 32) as u32);
+        // let a10: [u32; 32] = array::from_fn(|i| (self[i + 32] ) as u32);
+        // let a11: [u32; 32] = array::from_fn(|i| (self[i + 32] >> 32) as u32);
+
+        // let b00: [u32; 32] = array::from_fn(|i| rhs[i]  as u32);
+        // let b01: [u32; 32] = array::from_fn(|i| (rhs[i] >> 32) as u32);
+        // let b10: [u32; 32] = array::from_fn(|i| rhs[i + 32]  as u32);
+        // let b11: [u32; 32] = array::from_fn(|i| (rhs[i + 32] >> 32) as u32);
+
+        // let m0 = a00.xor(a11).matmul(b00.xor(b11));
+        // let m1 = a10.xor(a11).matmul(b00);
+        // let m2 = a00.matmul(b01.xor(b11));
+        // let m3 = a11.matmul(b10.xor(b00));
+        // let m4 = a00.xor(a01).matmul(b11);
+        // let m5 = a10.xor(a00).matmul(b00.xor(b01));
+        // let m6 = a01.xor(a11).matmul(b10.xor(b11));
+
+        // let c00 = m0.xor(m3).xor(m4).xor(m6);
+        // let c01 = m2.xor(m4);
+        // let c10 = m1.xor(m3);
+        // let c11 = m0.xor(m1).xor(m2).xor(m5);
+
+        // let mut result = Self::ZERO;
+        // for i in 0..32 {
+        //     result[i] = ((c01[i] as u64) << 32) | c00[i] as u64;
+        //     result[i + 32] = ((c11[i] as u64) << 32) | c10[i] as u64;
+        // }
+        // result
+
+        const STRIPE_BITS: usize = 5;
         const SUM_TABLE_LEN: usize = 1 << STRIPE_BITS;
-        const STRIPE_INDEX: [usize; SUM_TABLE_LEN] = stripe_index();
-        const ROW_SUM_INDEX: [usize; SUM_TABLE_LEN] = row_sum_index();
+        const STRIPE_INDEX: [usize; SUM_TABLE_LEN] = gray_code_diffs();
+        const ROW_SUM_INDEX: [usize; SUM_TABLE_LEN] = gray_code_index();
 
         let mut sums = [0; SUM_TABLE_LEN];
         let mut result = [0; Self::SIZE];
         let mut mask = (1 << STRIPE_BITS) - 1;
         let mut shift = 0;
-        while mask != 0 {
+        for _ in 0..(Self::SIZE / STRIPE_BITS) {
             let range = shift..(shift + STRIPE_BITS).min(Self::SIZE);
             let stripe = &rhs[range];
-            sums[0] = 0;
             for i in 1..SUM_TABLE_LEN {
                 let j = STRIPE_INDEX[i];
-                sums[i] = sums[i - 1] ^ stripe[j];
+                sums[i] = sums[i-1] ^ stripe.get(j).unwrap_or(&0);
             }
 
             for (i, row) in self.iter().enumerate() {
@@ -825,208 +1008,257 @@ impl BitMatrix for [u64; 64] {
     }
 
     fn transpose(&mut self) {
+        macro_rules! delta_exchange {
+            ($a:literal, $b:literal, $mask:expr, $shift:literal) => {
+                let t = ((self[$b] >> $shift) ^ self[$a]) & $mask;
+                self[$a] ^= t;
+                self[$b] ^= t << $shift;
+            };
+        }
+
         let mask = 0xFFFFFFFF;
-        (self[32], self[0]) = delta_exchange(self[32], self[0], mask, 32);
-        (self[33], self[1]) = delta_exchange(self[33], self[1], mask, 32);
-        (self[34], self[2]) = delta_exchange(self[34], self[2], mask, 32);
-        (self[35], self[3]) = delta_exchange(self[35], self[3], mask, 32);
-        (self[36], self[4]) = delta_exchange(self[36], self[4], mask, 32);
-        (self[37], self[5]) = delta_exchange(self[37], self[5], mask, 32);
-        (self[38], self[6]) = delta_exchange(self[38], self[6], mask, 32);
-        (self[39], self[7]) = delta_exchange(self[39], self[7], mask, 32);
-        (self[40], self[8]) = delta_exchange(self[40], self[8], mask, 32);
-        (self[41], self[9]) = delta_exchange(self[41], self[9], mask, 32);
-        (self[42], self[10]) = delta_exchange(self[42], self[10], mask, 32);
-        (self[43], self[11]) = delta_exchange(self[43], self[11], mask, 32);
-        (self[44], self[12]) = delta_exchange(self[44], self[12], mask, 32);
-        (self[45], self[13]) = delta_exchange(self[45], self[13], mask, 32);
-        (self[46], self[14]) = delta_exchange(self[46], self[14], mask, 32);
-        (self[47], self[15]) = delta_exchange(self[47], self[15], mask, 32);
-        (self[48], self[16]) = delta_exchange(self[48], self[16], mask, 32);
-        (self[49], self[17]) = delta_exchange(self[49], self[17], mask, 32);
-        (self[50], self[18]) = delta_exchange(self[50], self[18], mask, 32);
-        (self[51], self[19]) = delta_exchange(self[51], self[19], mask, 32);
-        (self[52], self[20]) = delta_exchange(self[52], self[20], mask, 32);
-        (self[53], self[21]) = delta_exchange(self[53], self[21], mask, 32);
-        (self[54], self[22]) = delta_exchange(self[54], self[22], mask, 32);
-        (self[55], self[23]) = delta_exchange(self[55], self[23], mask, 32);
-        (self[56], self[24]) = delta_exchange(self[56], self[24], mask, 32);
-        (self[57], self[25]) = delta_exchange(self[57], self[25], mask, 32);
-        (self[58], self[26]) = delta_exchange(self[58], self[26], mask, 32);
-        (self[59], self[27]) = delta_exchange(self[59], self[27], mask, 32);
-        (self[60], self[28]) = delta_exchange(self[60], self[28], mask, 32);
-        (self[61], self[29]) = delta_exchange(self[61], self[29], mask, 32);
-        (self[62], self[30]) = delta_exchange(self[62], self[30], mask, 32);
-        (self[63], self[31]) = delta_exchange(self[63], self[31], mask, 32);
+        delta_exchange!(32, 0, mask, 32);
+        delta_exchange!(33, 1, mask, 32);
+        delta_exchange!(34, 2, mask, 32);
+        delta_exchange!(35, 3, mask, 32);
+        delta_exchange!(36, 4, mask, 32);
+        delta_exchange!(37, 5, mask, 32);
+        delta_exchange!(38, 6, mask, 32);
+        delta_exchange!(39, 7, mask, 32);
+        delta_exchange!(40, 8, mask, 32);
+        delta_exchange!(41, 9, mask, 32);
+        delta_exchange!(42, 10, mask, 32);
+        delta_exchange!(43, 11, mask, 32);
+        delta_exchange!(44, 12, mask, 32);
+        delta_exchange!(45, 13, mask, 32);
+        delta_exchange!(46, 14, mask, 32);
+        delta_exchange!(47, 15, mask, 32);
+        delta_exchange!(48, 16, mask, 32);
+        delta_exchange!(49, 17, mask, 32);
+        delta_exchange!(50, 18, mask, 32);
+        delta_exchange!(51, 19, mask, 32);
+        delta_exchange!(52, 20, mask, 32);
+        delta_exchange!(53, 21, mask, 32);
+        delta_exchange!(54, 22, mask, 32);
+        delta_exchange!(55, 23, mask, 32);
+        delta_exchange!(56, 24, mask, 32);
+        delta_exchange!(57, 25, mask, 32);
+        delta_exchange!(58, 26, mask, 32);
+        delta_exchange!(59, 27, mask, 32);
+        delta_exchange!(60, 28, mask, 32);
+        delta_exchange!(61, 29, mask, 32);
+        delta_exchange!(62, 30, mask, 32);
+        delta_exchange!(63, 31, mask, 32);
 
         let mask = 0xFFFF0000FFFF;
-        (self[16], self[0]) = delta_exchange(self[16], self[0], mask, 16);
-        (self[17], self[1]) = delta_exchange(self[17], self[1], mask, 16);
-        (self[18], self[2]) = delta_exchange(self[18], self[2], mask, 16);
-        (self[19], self[3]) = delta_exchange(self[19], self[3], mask, 16);
-        (self[20], self[4]) = delta_exchange(self[20], self[4], mask, 16);
-        (self[21], self[5]) = delta_exchange(self[21], self[5], mask, 16);
-        (self[22], self[6]) = delta_exchange(self[22], self[6], mask, 16);
-        (self[23], self[7]) = delta_exchange(self[23], self[7], mask, 16);
-        (self[24], self[8]) = delta_exchange(self[24], self[8], mask, 16);
-        (self[25], self[9]) = delta_exchange(self[25], self[9], mask, 16);
-        (self[26], self[10]) = delta_exchange(self[26], self[10], mask, 16);
-        (self[27], self[11]) = delta_exchange(self[27], self[11], mask, 16);
-        (self[28], self[12]) = delta_exchange(self[28], self[12], mask, 16);
-        (self[29], self[13]) = delta_exchange(self[29], self[13], mask, 16);
-        (self[30], self[14]) = delta_exchange(self[30], self[14], mask, 16);
-        (self[31], self[15]) = delta_exchange(self[31], self[15], mask, 16);
-        (self[48], self[32]) = delta_exchange(self[48], self[32], mask, 16);
-        (self[49], self[33]) = delta_exchange(self[49], self[33], mask, 16);
-        (self[50], self[34]) = delta_exchange(self[50], self[34], mask, 16);
-        (self[51], self[35]) = delta_exchange(self[51], self[35], mask, 16);
-        (self[52], self[36]) = delta_exchange(self[52], self[36], mask, 16);
-        (self[53], self[37]) = delta_exchange(self[53], self[37], mask, 16);
-        (self[54], self[38]) = delta_exchange(self[54], self[38], mask, 16);
-        (self[55], self[39]) = delta_exchange(self[55], self[39], mask, 16);
-        (self[56], self[40]) = delta_exchange(self[56], self[40], mask, 16);
-        (self[57], self[41]) = delta_exchange(self[57], self[41], mask, 16);
-        (self[58], self[42]) = delta_exchange(self[58], self[42], mask, 16);
-        (self[59], self[43]) = delta_exchange(self[59], self[43], mask, 16);
-        (self[60], self[44]) = delta_exchange(self[60], self[44], mask, 16);
-        (self[61], self[45]) = delta_exchange(self[61], self[45], mask, 16);
-        (self[62], self[46]) = delta_exchange(self[62], self[46], mask, 16);
-        (self[63], self[47]) = delta_exchange(self[63], self[47], mask, 16);
+        delta_exchange!(16, 0, mask, 16);
+        delta_exchange!(17, 1, mask, 16);
+        delta_exchange!(18, 2, mask, 16);
+        delta_exchange!(19, 3, mask, 16);
+        delta_exchange!(20, 4, mask, 16);
+        delta_exchange!(21, 5, mask, 16);
+        delta_exchange!(22, 6, mask, 16);
+        delta_exchange!(23, 7, mask, 16);
+        delta_exchange!(24, 8, mask, 16);
+        delta_exchange!(25, 9, mask, 16);
+        delta_exchange!(26, 10, mask, 16);
+        delta_exchange!(27, 11, mask, 16);
+        delta_exchange!(28, 12, mask, 16);
+        delta_exchange!(29, 13, mask, 16);
+        delta_exchange!(30, 14, mask, 16);
+        delta_exchange!(31, 15, mask, 16);
+        delta_exchange!(48, 32, mask, 16);
+        delta_exchange!(49, 33, mask, 16);
+        delta_exchange!(50, 34, mask, 16);
+        delta_exchange!(51, 35, mask, 16);
+        delta_exchange!(52, 36, mask, 16);
+        delta_exchange!(53, 37, mask, 16);
+        delta_exchange!(54, 38, mask, 16);
+        delta_exchange!(55, 39, mask, 16);
+        delta_exchange!(56, 40, mask, 16);
+        delta_exchange!(57, 41, mask, 16);
+        delta_exchange!(58, 42, mask, 16);
+        delta_exchange!(59, 43, mask, 16);
+        delta_exchange!(60, 44, mask, 16);
+        delta_exchange!(61, 45, mask, 16);
+        delta_exchange!(62, 46, mask, 16);
+        delta_exchange!(63, 47, mask, 16);
 
         let mask = 0xFF00FF00FF00FF;
-        (self[8], self[0]) = delta_exchange(self[8], self[0], mask, 8);
-        (self[9], self[1]) = delta_exchange(self[9], self[1], mask, 8);
-        (self[10], self[2]) = delta_exchange(self[10], self[2], mask, 8);
-        (self[11], self[3]) = delta_exchange(self[11], self[3], mask, 8);
-        (self[12], self[4]) = delta_exchange(self[12], self[4], mask, 8);
-        (self[13], self[5]) = delta_exchange(self[13], self[5], mask, 8);
-        (self[14], self[6]) = delta_exchange(self[14], self[6], mask, 8);
-        (self[15], self[7]) = delta_exchange(self[15], self[7], mask, 8);
-        (self[24], self[16]) = delta_exchange(self[24], self[16], mask, 8);
-        (self[25], self[17]) = delta_exchange(self[25], self[17], mask, 8);
-        (self[26], self[18]) = delta_exchange(self[26], self[18], mask, 8);
-        (self[27], self[19]) = delta_exchange(self[27], self[19], mask, 8);
-        (self[28], self[20]) = delta_exchange(self[28], self[20], mask, 8);
-        (self[29], self[21]) = delta_exchange(self[29], self[21], mask, 8);
-        (self[30], self[22]) = delta_exchange(self[30], self[22], mask, 8);
-        (self[31], self[23]) = delta_exchange(self[31], self[23], mask, 8);
-        (self[40], self[32]) = delta_exchange(self[40], self[32], mask, 8);
-        (self[41], self[33]) = delta_exchange(self[41], self[33], mask, 8);
-        (self[42], self[34]) = delta_exchange(self[42], self[34], mask, 8);
-        (self[43], self[35]) = delta_exchange(self[43], self[35], mask, 8);
-        (self[44], self[36]) = delta_exchange(self[44], self[36], mask, 8);
-        (self[45], self[37]) = delta_exchange(self[45], self[37], mask, 8);
-        (self[46], self[38]) = delta_exchange(self[46], self[38], mask, 8);
-        (self[47], self[39]) = delta_exchange(self[47], self[39], mask, 8);
-        (self[56], self[48]) = delta_exchange(self[56], self[48], mask, 8);
-        (self[57], self[49]) = delta_exchange(self[57], self[49], mask, 8);
-        (self[58], self[50]) = delta_exchange(self[58], self[50], mask, 8);
-        (self[59], self[51]) = delta_exchange(self[59], self[51], mask, 8);
-        (self[60], self[52]) = delta_exchange(self[60], self[52], mask, 8);
-        (self[61], self[53]) = delta_exchange(self[61], self[53], mask, 8);
-        (self[62], self[54]) = delta_exchange(self[62], self[54], mask, 8);
-        (self[63], self[55]) = delta_exchange(self[63], self[55], mask, 8);
+        delta_exchange!(8, 0, mask, 8);
+        delta_exchange!(9, 1, mask, 8);
+        delta_exchange!(10, 2, mask, 8);
+        delta_exchange!(11, 3, mask, 8);
+        delta_exchange!(12, 4, mask, 8);
+        delta_exchange!(13, 5, mask, 8);
+        delta_exchange!(14, 6, mask, 8);
+        delta_exchange!(15, 7, mask, 8);
+        delta_exchange!(24, 16, mask, 8);
+        delta_exchange!(25, 17, mask, 8);
+        delta_exchange!(26, 18, mask, 8);
+        delta_exchange!(27, 19, mask, 8);
+        delta_exchange!(28, 20, mask, 8);
+        delta_exchange!(29, 21, mask, 8);
+        delta_exchange!(30, 22, mask, 8);
+        delta_exchange!(31, 23, mask, 8);
+        delta_exchange!(40, 32, mask, 8);
+        delta_exchange!(41, 33, mask, 8);
+        delta_exchange!(42, 34, mask, 8);
+        delta_exchange!(43, 35, mask, 8);
+        delta_exchange!(44, 36, mask, 8);
+        delta_exchange!(45, 37, mask, 8);
+        delta_exchange!(46, 38, mask, 8);
+        delta_exchange!(47, 39, mask, 8);
+        delta_exchange!(56, 48, mask, 8);
+        delta_exchange!(57, 49, mask, 8);
+        delta_exchange!(58, 50, mask, 8);
+        delta_exchange!(59, 51, mask, 8);
+        delta_exchange!(60, 52, mask, 8);
+        delta_exchange!(61, 53, mask, 8);
+        delta_exchange!(62, 54, mask, 8);
+        delta_exchange!(63, 55, mask, 8);
 
         let mask = 0xF0F0F0F0F0F0F0F;
-        (self[4], self[0]) = delta_exchange(self[4], self[0], mask, 4);
-        (self[5], self[1]) = delta_exchange(self[5], self[1], mask, 4);
-        (self[6], self[2]) = delta_exchange(self[6], self[2], mask, 4);
-        (self[7], self[3]) = delta_exchange(self[7], self[3], mask, 4);
-        (self[12], self[8]) = delta_exchange(self[12], self[8], mask, 4);
-        (self[13], self[9]) = delta_exchange(self[13], self[9], mask, 4);
-        (self[14], self[10]) = delta_exchange(self[14], self[10], mask, 4);
-        (self[15], self[11]) = delta_exchange(self[15], self[11], mask, 4);
-        (self[20], self[16]) = delta_exchange(self[20], self[16], mask, 4);
-        (self[21], self[17]) = delta_exchange(self[21], self[17], mask, 4);
-        (self[22], self[18]) = delta_exchange(self[22], self[18], mask, 4);
-        (self[23], self[19]) = delta_exchange(self[23], self[19], mask, 4);
-        (self[28], self[24]) = delta_exchange(self[28], self[24], mask, 4);
-        (self[29], self[25]) = delta_exchange(self[29], self[25], mask, 4);
-        (self[30], self[26]) = delta_exchange(self[30], self[26], mask, 4);
-        (self[31], self[27]) = delta_exchange(self[31], self[27], mask, 4);
-        (self[36], self[32]) = delta_exchange(self[36], self[32], mask, 4);
-        (self[37], self[33]) = delta_exchange(self[37], self[33], mask, 4);
-        (self[38], self[34]) = delta_exchange(self[38], self[34], mask, 4);
-        (self[39], self[35]) = delta_exchange(self[39], self[35], mask, 4);
-        (self[44], self[40]) = delta_exchange(self[44], self[40], mask, 4);
-        (self[45], self[41]) = delta_exchange(self[45], self[41], mask, 4);
-        (self[46], self[42]) = delta_exchange(self[46], self[42], mask, 4);
-        (self[47], self[43]) = delta_exchange(self[47], self[43], mask, 4);
-        (self[52], self[48]) = delta_exchange(self[52], self[48], mask, 4);
-        (self[53], self[49]) = delta_exchange(self[53], self[49], mask, 4);
-        (self[54], self[50]) = delta_exchange(self[54], self[50], mask, 4);
-        (self[55], self[51]) = delta_exchange(self[55], self[51], mask, 4);
-        (self[60], self[56]) = delta_exchange(self[60], self[56], mask, 4);
-        (self[61], self[57]) = delta_exchange(self[61], self[57], mask, 4);
-        (self[62], self[58]) = delta_exchange(self[62], self[58], mask, 4);
-        (self[63], self[59]) = delta_exchange(self[63], self[59], mask, 4);
+        delta_exchange!(4, 0, mask, 4);
+        delta_exchange!(5, 1, mask, 4);
+        delta_exchange!(6, 2, mask, 4);
+        delta_exchange!(7, 3, mask, 4);
+        delta_exchange!(12, 8, mask, 4);
+        delta_exchange!(13, 9, mask, 4);
+        delta_exchange!(14, 10, mask, 4);
+        delta_exchange!(15, 11, mask, 4);
+        delta_exchange!(20, 16, mask, 4);
+        delta_exchange!(21, 17, mask, 4);
+        delta_exchange!(22, 18, mask, 4);
+        delta_exchange!(23, 19, mask, 4);
+        delta_exchange!(28, 24, mask, 4);
+        delta_exchange!(29, 25, mask, 4);
+        delta_exchange!(30, 26, mask, 4);
+        delta_exchange!(31, 27, mask, 4);
+        delta_exchange!(36, 32, mask, 4);
+        delta_exchange!(37, 33, mask, 4);
+        delta_exchange!(38, 34, mask, 4);
+        delta_exchange!(39, 35, mask, 4);
+        delta_exchange!(44, 40, mask, 4);
+        delta_exchange!(45, 41, mask, 4);
+        delta_exchange!(46, 42, mask, 4);
+        delta_exchange!(47, 43, mask, 4);
+        delta_exchange!(52, 48, mask, 4);
+        delta_exchange!(53, 49, mask, 4);
+        delta_exchange!(54, 50, mask, 4);
+        delta_exchange!(55, 51, mask, 4);
+        delta_exchange!(60, 56, mask, 4);
+        delta_exchange!(61, 57, mask, 4);
+        delta_exchange!(62, 58, mask, 4);
+        delta_exchange!(63, 59, mask, 4);
 
         let mask = 0x3333333333333333;
-        (self[2], self[0]) = delta_exchange(self[2], self[0], mask, 2);
-        (self[3], self[1]) = delta_exchange(self[3], self[1], mask, 2);
-        (self[6], self[4]) = delta_exchange(self[6], self[4], mask, 2);
-        (self[7], self[5]) = delta_exchange(self[7], self[5], mask, 2);
-        (self[10], self[8]) = delta_exchange(self[10], self[8], mask, 2);
-        (self[11], self[9]) = delta_exchange(self[11], self[9], mask, 2);
-        (self[14], self[12]) = delta_exchange(self[14], self[12], mask, 2);
-        (self[15], self[13]) = delta_exchange(self[15], self[13], mask, 2);
-        (self[18], self[16]) = delta_exchange(self[18], self[16], mask, 2);
-        (self[19], self[17]) = delta_exchange(self[19], self[17], mask, 2);
-        (self[22], self[20]) = delta_exchange(self[22], self[20], mask, 2);
-        (self[23], self[21]) = delta_exchange(self[23], self[21], mask, 2);
-        (self[26], self[24]) = delta_exchange(self[26], self[24], mask, 2);
-        (self[27], self[25]) = delta_exchange(self[27], self[25], mask, 2);
-        (self[30], self[28]) = delta_exchange(self[30], self[28], mask, 2);
-        (self[31], self[29]) = delta_exchange(self[31], self[29], mask, 2);
-        (self[34], self[32]) = delta_exchange(self[34], self[32], mask, 2);
-        (self[35], self[33]) = delta_exchange(self[35], self[33], mask, 2);
-        (self[38], self[36]) = delta_exchange(self[38], self[36], mask, 2);
-        (self[39], self[37]) = delta_exchange(self[39], self[37], mask, 2);
-        (self[42], self[40]) = delta_exchange(self[42], self[40], mask, 2);
-        (self[43], self[41]) = delta_exchange(self[43], self[41], mask, 2);
-        (self[46], self[44]) = delta_exchange(self[46], self[44], mask, 2);
-        (self[47], self[45]) = delta_exchange(self[47], self[45], mask, 2);
-        (self[50], self[48]) = delta_exchange(self[50], self[48], mask, 2);
-        (self[51], self[49]) = delta_exchange(self[51], self[49], mask, 2);
-        (self[54], self[52]) = delta_exchange(self[54], self[52], mask, 2);
-        (self[55], self[53]) = delta_exchange(self[55], self[53], mask, 2);
-        (self[58], self[56]) = delta_exchange(self[58], self[56], mask, 2);
-        (self[59], self[57]) = delta_exchange(self[59], self[57], mask, 2);
-        (self[62], self[60]) = delta_exchange(self[62], self[60], mask, 2);
-        (self[63], self[61]) = delta_exchange(self[63], self[61], mask, 2);
+        delta_exchange!(2, 0, mask, 2);
+        delta_exchange!(3, 1, mask, 2);
+        delta_exchange!(6, 4, mask, 2);
+        delta_exchange!(7, 5, mask, 2);
+        delta_exchange!(10, 8, mask, 2);
+        delta_exchange!(11, 9, mask, 2);
+        delta_exchange!(14, 12, mask, 2);
+        delta_exchange!(15, 13, mask, 2);
+        delta_exchange!(18, 16, mask, 2);
+        delta_exchange!(19, 17, mask, 2);
+        delta_exchange!(22, 20, mask, 2);
+        delta_exchange!(23, 21, mask, 2);
+        delta_exchange!(26, 24, mask, 2);
+        delta_exchange!(27, 25, mask, 2);
+        delta_exchange!(30, 28, mask, 2);
+        delta_exchange!(31, 29, mask, 2);
+        delta_exchange!(34, 32, mask, 2);
+        delta_exchange!(35, 33, mask, 2);
+        delta_exchange!(38, 36, mask, 2);
+        delta_exchange!(39, 37, mask, 2);
+        delta_exchange!(42, 40, mask, 2);
+        delta_exchange!(43, 41, mask, 2);
+        delta_exchange!(46, 44, mask, 2);
+        delta_exchange!(47, 45, mask, 2);
+        delta_exchange!(50, 48, mask, 2);
+        delta_exchange!(51, 49, mask, 2);
+        delta_exchange!(54, 52, mask, 2);
+        delta_exchange!(55, 53, mask, 2);
+        delta_exchange!(58, 56, mask, 2);
+        delta_exchange!(59, 57, mask, 2);
+        delta_exchange!(62, 60, mask, 2);
+        delta_exchange!(63, 61, mask, 2);
 
         let mask = 0x5555555555555555;
-        (self[1], self[0]) = delta_exchange(self[1], self[0], mask, 1);
-        (self[3], self[2]) = delta_exchange(self[3], self[2], mask, 1);
-        (self[5], self[4]) = delta_exchange(self[5], self[4], mask, 1);
-        (self[7], self[6]) = delta_exchange(self[7], self[6], mask, 1);
-        (self[9], self[8]) = delta_exchange(self[9], self[8], mask, 1);
-        (self[11], self[10]) = delta_exchange(self[11], self[10], mask, 1);
-        (self[13], self[12]) = delta_exchange(self[13], self[12], mask, 1);
-        (self[15], self[14]) = delta_exchange(self[15], self[14], mask, 1);
-        (self[17], self[16]) = delta_exchange(self[17], self[16], mask, 1);
-        (self[19], self[18]) = delta_exchange(self[19], self[18], mask, 1);
-        (self[21], self[20]) = delta_exchange(self[21], self[20], mask, 1);
-        (self[23], self[22]) = delta_exchange(self[23], self[22], mask, 1);
-        (self[25], self[24]) = delta_exchange(self[25], self[24], mask, 1);
-        (self[27], self[26]) = delta_exchange(self[27], self[26], mask, 1);
-        (self[29], self[28]) = delta_exchange(self[29], self[28], mask, 1);
-        (self[31], self[30]) = delta_exchange(self[31], self[30], mask, 1);
-        (self[33], self[32]) = delta_exchange(self[33], self[32], mask, 1);
-        (self[35], self[34]) = delta_exchange(self[35], self[34], mask, 1);
-        (self[37], self[36]) = delta_exchange(self[37], self[36], mask, 1);
-        (self[39], self[38]) = delta_exchange(self[39], self[38], mask, 1);
-        (self[41], self[40]) = delta_exchange(self[41], self[40], mask, 1);
-        (self[43], self[42]) = delta_exchange(self[43], self[42], mask, 1);
-        (self[45], self[44]) = delta_exchange(self[45], self[44], mask, 1);
-        (self[47], self[46]) = delta_exchange(self[47], self[46], mask, 1);
-        (self[49], self[48]) = delta_exchange(self[49], self[48], mask, 1);
-        (self[51], self[50]) = delta_exchange(self[51], self[50], mask, 1);
-        (self[53], self[52]) = delta_exchange(self[53], self[52], mask, 1);
-        (self[55], self[54]) = delta_exchange(self[55], self[54], mask, 1);
-        (self[57], self[56]) = delta_exchange(self[57], self[56], mask, 1);
-        (self[59], self[58]) = delta_exchange(self[59], self[58], mask, 1);
-        (self[61], self[60]) = delta_exchange(self[61], self[60], mask, 1);
-        (self[63], self[62]) = delta_exchange(self[63], self[62], mask, 1);
+        delta_exchange!(1, 0, mask, 1);
+        delta_exchange!(3, 2, mask, 1);
+        delta_exchange!(5, 4, mask, 1);
+        delta_exchange!(7, 6, mask, 1);
+        delta_exchange!(9, 8, mask, 1);
+        delta_exchange!(11, 10, mask, 1);
+        delta_exchange!(13, 12, mask, 1);
+        delta_exchange!(15, 14, mask, 1);
+        delta_exchange!(17, 16, mask, 1);
+        delta_exchange!(19, 18, mask, 1);
+        delta_exchange!(21, 20, mask, 1);
+        delta_exchange!(23, 22, mask, 1);
+        delta_exchange!(25, 24, mask, 1);
+        delta_exchange!(27, 26, mask, 1);
+        delta_exchange!(29, 28, mask, 1);
+        delta_exchange!(31, 30, mask, 1);
+        delta_exchange!(33, 32, mask, 1);
+        delta_exchange!(35, 34, mask, 1);
+        delta_exchange!(37, 36, mask, 1);
+        delta_exchange!(39, 38, mask, 1);
+        delta_exchange!(41, 40, mask, 1);
+        delta_exchange!(43, 42, mask, 1);
+        delta_exchange!(45, 44, mask, 1);
+        delta_exchange!(47, 46, mask, 1);
+        delta_exchange!(49, 48, mask, 1);
+        delta_exchange!(51, 50, mask, 1);
+        delta_exchange!(53, 52, mask, 1);
+        delta_exchange!(55, 54, mask, 1);
+        delta_exchange!(57, 56, mask, 1);
+        delta_exchange!(59, 58, mask, 1);
+        delta_exchange!(61, 60, mask, 1);
+        delta_exchange!(63, 62, mask, 1);
     }
+
+    fn zip<F>(&self, rhs: &Self, mut f: F) -> Self
+    where
+        F: FnMut(Self::RowRepr, Self::RowRepr) -> Self::RowRepr,
+    {
+        array::from_fn(|i| f(self[i], rhs[i]))
+    }
+}
+
+/// Computes the gray code of a number `i`.
+const fn gray_code(i: usize) -> usize {
+    i ^ (i >> 1)
+}
+
+/// Computes an index into the stripe for constructing the row sum table in the four russians
+/// algorithm. The element at `index` is the index of the row that should be `XOR`ed with the
+/// previous row sum.
+const fn gray_code_diffs<const N: usize>() -> [usize; N] {
+    let mut diffs = [0; N];
+    let mut prev = 0;
+    let mut i = 1;
+    while i < N {
+        let code = gray_code(i);
+        diffs[i] = (usize::BITS - (code ^ prev).leading_zeros() - 1) as usize;
+        // diffs[i] = (code ^ prev).ilog2() as usize;
+        prev = code;
+        i += 1
+    }
+    diffs
+}
+
+/// Computes an index into the row sum table in the four russians algorithm. The element at `prefix`
+/// is the index of the row sum for that prefix.
+const fn gray_code_index<const N: usize>() -> [usize; N] {
+    let mut codes = [0; N];
+    let mut i = 1;
+    while i < N {
+        codes[gray_code(i)] = i;
+        i += 1;
+    }
+    codes
 }
