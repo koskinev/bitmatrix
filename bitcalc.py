@@ -1,3 +1,4 @@
+from copy import copy
 from typing import Union
 
 
@@ -39,6 +40,74 @@ class Expr:
     __match_args__ = ("x",)
     x: Union[int, str, "Expr", list["Expr"]]
 
+    def anf(self) -> "Expr":
+        """
+        Returns the algebraic normal form of the expression
+        """
+        match self:
+            case Bit(_):
+                anf = self
+            case Not(x):
+                anf = Xor(Bit(1), x.anf())
+            case And(x) if any(x == Bit(0) for x in x):
+                anf = Bit(0)
+            case And(x) if all(type(x) is Bit for x in x):
+                bits = []
+                for expr in x:
+                    if expr != Bit(1) and expr not in bits:
+                        bits.append(expr)
+                if len(bits) < 2:
+                    return bits[0]
+                else:
+                    return And(*bits)
+            case Or(x) if any(x == Bit(1) for x in x):
+                anf = Bit(1)
+            case Xor(x):
+                anfs = []
+                rest = []
+                for expr in x:
+                    if type(expr) is Bit and expr not in anfs:
+                        anfs.append(expr)
+                    if (
+                        type(expr) is And
+                        and all(type(x) is Bit for x in expr.x)
+                        and expr not in anfs
+                    ):
+                        anfs.append(expr)
+                    else:
+                        rest.append(expr.anf())
+                anf = Xor(*anfs, *rest)
+            case _ if len(self.vars()) > 1:
+                var = self.vars().pop()
+                x0 = self.subst(var, Bit(0))
+                x1 = self.subst(var, Bit(1))
+                a = x0.anf()
+                b = And(Bit(var), x0).anf()
+                c = And(Bit(var), x1).anf()
+                anf = Xor(a, b, c)
+            case _:
+                anf = self
+        if type(anf) is Xor:
+            res = []
+            for expr in anf.x:
+                if expr not in res:
+                    res.append(expr)
+            if len(res) == 1:
+                return res[0]
+            else:
+                res.sort()
+                return Xor(*res)
+        else:
+            return anf
+
+    def eval(self) -> "Expr":
+        """
+        Evaluates the expression
+        """
+        return NotImplementedError(
+            "The eval method should be implemented by the expression type."
+        )
+
     @property
     def name(self) -> str:
         """
@@ -46,16 +115,59 @@ class Expr:
         """
         return type(self).__name__
 
+    def subst(self, var: str, expr: "Expr") -> "Expr":
+        """
+        Substitutes the variable with the given expression and returns the resulting expression.
+        If the variable is not found, returns the original expression.
+        """
+        return NotImplementedError(
+            "The subst method should be implemented by the expression type."
+        )
+
+    def vars(self) -> set[str]:
+        """
+        Returns the set of all the variables in the expression
+        """
+        match self:
+            case Bit(x) if type(x) is str:
+                return {x}
+            case Bit(_):
+                return {}
+            case NaryExpr(x):
+                return set().union(*[x.vars() for x in x])
+            case _:
+                return self.x.vars()
+
     def __eq__(self, other: "Expr") -> bool:
         return expr_eq(self, other)
 
     def __lt__(self, other: "Expr") -> bool:
-        if type(self) is not type(other):
-            return self.name < other.name
-        elif type(self.x) is list:
-            return sorted(self.x) < sorted(other.x)
-        else:
-            return self.x < other.x
+        match self, other:
+            case Bit(_), Bit(_):
+                return self.x < other.x
+            case Bit(_), Expr(_):
+                return True
+            case Expr(_), Bit(_):
+                return False
+            case NaryExpr(_), NaryExpr(_) if type(self) is type(other):
+                if len(self.x) < len(other.x):
+                    return True
+                elif len(self.x) > len(other.x):
+                    return False
+                else:
+                    lhs = [sorted(self.x)]
+                    rhs = [sorted(other.x)]
+                    return lhs < rhs
+            case _:
+                return self.name < other.name
+
+        str(self) < str(other)
+        # if type(self) is not type(other):
+        #     return self.name < other.name
+        # elif type(self.x) is list:
+        #     return sorted(self.x) < sorted(other.x)
+        # else:
+        #     return self.x < other.x
 
     def __and__(self, other: "Expr") -> "Expr":
         return And(self, other)
@@ -104,6 +216,12 @@ class Bit(Expr):
     def eval(self) -> "Expr":
         return self
 
+    def subst(self, var: str, expr: "Expr") -> "Expr":
+        if self.x == var:
+            return copy(expr)
+        else:
+            return self
+
 
 class Not(Expr):
     x: "Expr"
@@ -128,6 +246,14 @@ class Not(Expr):
                 return Bit(x ^ 1)
             case Not(a):
                 return a
+            case x:
+                return Not(x)
+
+    def subst(self, var: str, expr: "Expr") -> "Expr":
+        result = self.x.subst(var, expr)
+        match result:
+            case Bit(0 as x) | Bit(1 as x):
+                return Bit(x ^ 1)
             case x:
                 return Not(x)
 
@@ -157,6 +283,16 @@ class And(NaryExpr):
             case _:
                 return And(*res)
 
+    def subst(self, var: str, expr: "Expr") -> "Expr":
+        res = []
+        for x in self.x:
+            r = x.subst(var, expr)
+            if r == Bit(0):
+                return Bit(0)
+            elif r != Bit(1):
+                res.append(r)
+        return And(*res)
+
 
 class Or(NaryExpr):
     def __repr__(self) -> str:
@@ -182,6 +318,21 @@ class Or(NaryExpr):
             # Otherwise, return the remaining operands as an Or expression
             case _:
                 return Or(*res)
+
+    def subst(self, var: str, expr: "Expr") -> "Expr":
+        res = []
+        for x in self.x:
+            r = x.subst(var, expr)
+            if r == Bit(1):
+                return Bit(1)
+            elif r != Bit(0):
+                res.append(r)
+        if len(res) == 0:
+            return Bit(0)
+        elif len(res) == 1:
+            return res[0]
+        else:
+            return Or(*res)
 
 
 class Xor(NaryExpr):
@@ -218,6 +369,16 @@ class Xor(NaryExpr):
             # Otherwise, return the remaining operands as an Xor expression
             case _:
                 return Xor(*res)
+
+    def subst(self, var: str, expr: "Expr") -> "Expr":
+        res = []
+        for x in self.x:
+            r = x.subst(var, expr)
+            if r == Bit(0):
+                continue
+            else:
+                res.append(r)
+        return Xor(*res)
 
 
 class UInt:
