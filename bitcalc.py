@@ -46,11 +46,11 @@ class Expr:
         """
         match self:
             case Bit(_):
-                anf = self
+                return self
             case Not(x):
-                anf = Xor(Bit(1), x.anf())
+                return Xor(Bit(1), x.anf())
             case And(x) if any(x == Bit(0) for x in x):
-                anf = Bit(0)
+                return Bit(0)
             case And(x) if all(type(x) is Bit for x in x):
                 bits = []
                 for expr in x:
@@ -61,7 +61,7 @@ class Expr:
                 else:
                     return And(*bits)
             case Or(x) if any(x == Bit(1) for x in x):
-                anf = Bit(1)
+                return Bit(1)
             case Xor(x):
                 anfs = []
                 rest = []
@@ -76,7 +76,7 @@ class Expr:
                         anfs.append(expr)
                     else:
                         rest.append(expr.anf())
-                anf = Xor(*anfs, *rest)
+                return Xor(*anfs, *rest)
             case _ if len(self.vars()) > 1:
                 var = self.vars().pop()
                 x0 = self.subst(var, Bit(0))
@@ -84,21 +84,9 @@ class Expr:
                 a = x0.anf()
                 b = And(Bit(var), x0).anf()
                 c = And(Bit(var), x1).anf()
-                anf = Xor(a, b, c)
+                return Xor(a, b, c)
             case _:
-                anf = self
-        if type(anf) is Xor:
-            res = []
-            for expr in anf.x:
-                if expr not in res:
-                    res.append(expr)
-            if len(res) == 1:
-                return res[0]
-            else:
-                res.sort()
-                return Xor(*res)
-        else:
-            return anf
+                return self
 
     def eval(self) -> "Expr":
         """
@@ -139,7 +127,8 @@ class Expr:
                 return self.x.vars()
 
     def __eq__(self, other: "Expr") -> bool:
-        return expr_eq(self, other)
+        return repr(self.anf()) == repr(other.anf())
+        # return expr_eq(self, other)
 
     def __lt__(self, other: "Expr") -> bool:
         match self, other:
@@ -160,14 +149,6 @@ class Expr:
                     return lhs < rhs
             case _:
                 return self.name < other.name
-
-        str(self) < str(other)
-        # if type(self) is not type(other):
-        #     return self.name < other.name
-        # elif type(self.x) is list:
-        #     return sorted(self.x) < sorted(other.x)
-        # else:
-        #     return self.x < other.x
 
     def __and__(self, other: "Expr") -> "Expr":
         return And(self, other)
@@ -260,10 +241,10 @@ class Not(Expr):
 
 class And(NaryExpr):
     def __repr__(self) -> str:
-        return f"And({repr([repr(a) for a in self.x])})"
+        return f"And({repr([repr(a) for a in sorted(self.x)])})"
 
     def __str__(self) -> str:
-        return f"({'&'.join([str(a) for a in self.x])})"
+        return f"({'&'.join([str(a) for a in sorted(self.x)])})"
 
     def eval(self) -> "Expr":
         res = [x.eval() for x in self.x]
@@ -296,10 +277,10 @@ class And(NaryExpr):
 
 class Or(NaryExpr):
     def __repr__(self) -> str:
-        return f"Or({repr([repr(a) for a in self.x])})"
+        return f"Or({repr([repr(a) for a in sorted(self.x)])})"
 
     def __str__(self) -> str:
-        return f"({'|'.join([str(a) for a in self.x])})"
+        return f"({'|'.join([str(a) for a in sorted(self.x)])})"
 
     def eval(self) -> "Expr":
         res = [x.eval() for x in self.x]
@@ -337,10 +318,10 @@ class Or(NaryExpr):
 
 class Xor(NaryExpr):
     def __repr__(self) -> str:
-        return f"Xor({repr([repr(a) for a in self.x])})"
+        return f"Xor({repr([repr(a) for a in sorted(self.x)])})"
 
     def __str__(self) -> str:
-        return f"({'^'.join([str(a) for a in self.x])})"
+        return f"({'^'.join([str(a) for a in sorted(self.x)])})"
 
     def eval(self) -> "Expr":
         res = [x.eval() for x in self.x]
