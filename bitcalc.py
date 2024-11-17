@@ -1,144 +1,123 @@
-from copy import copy
 from typing import Union
-
-
-def expr_eq(a: "Expr", b: "Expr", depth=0) -> bool:
-    match a.eval(), b.eval():
-        # Bit to Bit
-        # a = a
-        case (Bit(a), Bit(b)):
-            return a == b
-
-        # Negated Bit to Negated Bit or double negated Bit to Bit
-        # ~a = ~a, ~(~a) = a
-        case (Not(a), Not(b)) | (Not(Not(a)), b):
-            return a == b
-
-        # Distributive laws
-        # a & (b | c) == (a & b) | (a & c)
-        case (And([a, Or(b)]), Or(c)) | (And([a, Xor(b)]), Xor(c)):
-            return all(type(x) is And and a in x.x for x in c)
-
-        # Associative and commutative laws
-        # a & b & c == c & b & a, a | b | c == c | b | a, ...
-        case a, b if type(a) is type(b):
-            (x, y) = (a.x, b.x)
-            return all(a in y for a in x) and all(b in x for b in y)
-
-        # De Morgan's laws
-        # ~(a & b) = ~a | ~b, ~(a | b) = ~a & ~b, ...
-        case (Not(And(a)), Or(b)) | (Not(Or(a)), And(b)):
-            return all(Not(x) in b for x in a) and all(Not(y) in a for y in b)
-
-        case _ if depth == 0:
-            return expr_eq(b, a, 1)
-        case _:
-            return False
 
 
 class Expr:
     __match_args__ = ("x",)
     x: Union[int, str, "Expr", list["Expr"]]
 
-    def anf(self) -> "Expr":
+    def anf(self, ignore=[]) -> "Expr":
         """
         Returns the algebraic normal form of the expression
         """
+        match self.simplify():
+            case expr if expr.is_anf():
+                return expr
+            case expr:
+                # Select the variable to substitute and add it to the ignore list
+                vars = [v for v in expr.vars() if v not in ignore]
+                v = vars.pop()
+                ig = ignore + [v]
+
+                # Substitute the variable with 0 and 1
+                x0 = expr.subst(v, Bit(0))
+                x1 = expr.subst(v, Bit(1))
+
+                # Recursively calculate the ANF
+                g = x0.anf(ig)
+                h = And(Bit(v), Xor(x0, x1)).anf(ig)
+                return Xor(g, h).simplify()
+
+    def is_anf(self) -> bool:
+        """
+        Returns True if the expression is in algebraic normal form
+        """
         match self:
             case Bit(_):
-                return self
-            case Not(x):
-                return Xor(Bit(1), x.anf())
-            case And(x) if any(x == Bit(0) for x in x):
-                return Bit(0)
-            case And(x) if all(type(x) is Bit for x in x):
-                bits = []
-                for expr in x:
-                    if expr != Bit(1) and expr not in bits:
-                        bits.append(expr)
-                if len(bits) < 2:
-                    return bits[0]
-                else:
-                    return And(*bits)
-            case Or(x) if any(x == Bit(1) for x in x):
-                return Bit(1)
+                return True
             case Xor(x):
-                anfs = []
-                rest = []
-                for expr in x:
-                    if type(expr) is Bit and expr not in anfs:
-                        anfs.append(expr)
-                    if (
-                        type(expr) is And
-                        and all(type(x) is Bit for x in expr.x)
-                        and expr not in anfs
-                    ):
-                        anfs.append(expr)
-                    else:
-                        rest.append(expr.anf())
-                return Xor(*anfs, *rest)
-            case _ if len(self.vars()) > 1:
-                var = self.vars().pop()
-                x0 = self.subst(var, Bit(0))
-                x1 = self.subst(var, Bit(1))
-                a = x0.anf()
-                b = And(Bit(var), x0).anf()
-                c = And(Bit(var), x1).anf()
-                return Xor(a, b, c)
+                return all(a.is_anf() for a in x)
+            case And(x):
+                return all(type(a) is Bit for a in x)
             case _:
-                return self
-
-    def eval(self) -> "Expr":
-        """
-        Evaluates the expression
-        """
-        return NotImplementedError(
-            "The eval method should be implemented by the expression type."
-        )
+                return False
 
     @property
     def name(self) -> str:
         """
-        Returns the expression type as a string
+        The name of the expression
         """
         return type(self).__name__
+
+    def simplify(self) -> "Expr":
+        """
+        Simplifies the expression
+        """
+        return self
 
     def subst(self, var: str, expr: "Expr") -> "Expr":
         """
         Substitutes the variable with the given expression and returns the resulting expression.
         If the variable is not found, returns the original expression.
         """
-        return NotImplementedError(
-            "The subst method should be implemented by the expression type."
-        )
+        match self:
+            case Bit(x) if x == var:
+                return expr
+            case Bit(_) as bit:
+                return bit
+            case Not(x):
+                return Not(x.subst(var, expr)).simplify()
+            case And(x) | Or(x) | Xor(x):
+                x = [a.subst(var, expr) for a in x]
+                result = type(self)(*x)
+                return result.simplify()
+
+    def to_int(self) -> int | None:
+        """
+        Tries to convert the expression to an integer. If the expression contains any bits other
+        than `0` or `1`, returns `None`.
+        """
+        match self.simplify():
+            case Bit(0):
+                return 0
+            case Bit(1):
+                return 1
+            case _:
+                return None
 
     def vars(self) -> set[str]:
         """
-        Returns the set of all the variables in the expression
+        Returns the variables in the expression as a set
         """
         match self:
-            case Bit(x) if type(x) is str:
-                return {x}
-            case Bit(_):
+            case Bit(0) | Bit(1):
                 return {}
-            case NaryExpr(x):
-                return set().union(*[x.vars() for x in x])
-            case _:
-                return self.x.vars()
+            case Bit(x):
+                return {x}
+            case Not(x):
+                return x.vars()
+            case And(x) | Or(x) | Xor(x):
+                return set().union(*[a.vars() for a in x])
 
     def __eq__(self, other: "Expr") -> bool:
-        return repr(self.anf()) == repr(other.anf())
-        # return expr_eq(self, other)
+        repr_self = repr(self.anf())
+        repr_other = repr(other.anf())
+        return repr_self == repr_other
+
+    def __hash__(self) -> int:
+        return hash(repr(self.anf()))
 
     def __lt__(self, other: "Expr") -> bool:
         match self, other:
             case Bit(_), Bit(_):
-                return self.x < other.x
+                if type(self.x) is type(other.x):
+                    return self.x < other.x
+                else:
+                    return type(self.x) is int
             case Bit(_), Expr(_):
                 return True
             case Expr(_), Bit(_):
                 return False
-            case NaryExpr(_), NaryExpr(_) if type(self) is type(other):
+            case And(_), And(_) | Or(_), Or(_) | Xor(_), Xor(_):
                 if len(self.x) < len(other.x):
                     return True
                 elif len(self.x) > len(other.x):
@@ -153,30 +132,40 @@ class Expr:
     def __and__(self, other: "Expr") -> "Expr":
         return And(self, other)
 
-    def __or__(self, other: "Expr") -> "Expr":
-        return Or(self, other)
-
-    def __xor__(self, other: "Expr") -> "Expr":
-        return Xor(self, other)
-
     def __invert__(self) -> "Expr":
         return Not(self)
 
+    def __or__(self, other: "Expr") -> "Expr":
+        return Or(self, other)
 
-class NaryExpr(Expr):
-    x: list["Expr"]
+    def __str__(self):
+        match self:
+            case Bit(x):
+                return f"{x}"
+            case Not(x):
+                return f"~{x}"
+            case And(x):
+                return f"({'&'.join([str(a) for a in sorted(x)])})"
+            case Or(x):
+                return f"({'|'.join([str(a) for a in sorted(x)])})"
+            case Xor(x):
+                return f"({'^'.join([str(a) for a in sorted(self.x)])})"
 
-    def __init__(self, *args: "Expr"):
-        assert len(args) > 1 and all(
-            isinstance(a, Expr) for a in args
-        ), f"Invalid argument for {self.name}: {args}. Expected a list of expressions."
-        x = []
-        for a in args:
-            if type(a) is type(self):
-                x.extend(a.x)
-            else:
-                x.append(a)
-        self.x = x
+    def __repr__(self) -> str:
+        match self:
+            case Bit(x):
+                return f"Bit({x})"
+            case Not(x):
+                return f"Not({repr(x)})"
+            case And(x):
+                return f"And({repr([repr(a) for a in sorted(x)])})"
+            case Or(x):
+                return f"Or({repr([repr(a) for a in sorted(x)])})"
+            case Xor(x):
+                return f"Xor({repr([repr(a) for a in sorted(x)])})"
+
+    def __xor__(self, other: "Expr") -> "Expr":
+        return Xor(self, other)
 
 
 class Bit(Expr):
@@ -188,178 +177,145 @@ class Bit(Expr):
         ), f"Invalid argument: {x}. Expected 0, 1, or a string."
         self.x = x
 
-    def __repr__(self) -> str:
-        return f"Bit({self.x})"
-
-    def __str__(self) -> str:
-        return f"{self.x}"
-
-    def eval(self) -> "Expr":
+    def simplify(self) -> "Expr":
         return self
-
-    def subst(self, var: str, expr: "Expr") -> "Expr":
-        if self.x == var:
-            return copy(expr)
-        else:
-            return self
 
 
 class Not(Expr):
     x: "Expr"
 
     def __init__(self, x: "Expr"):
-        assert isinstance(x, Expr), f"Invalid argument: {x}. Expected an expression."
-        self.x = x.eval()
+        assert isinstance(
+            x, Expr
+        ), f"Invalid argument for a Not expression: {x}. Expected an expression."
+        self.x = x
 
-    def __repr__(self) -> str:
-        return f"Not({repr(self.x)})"
-
-    def __str__(self) -> str:
-        match self.x:
-            case Bit(0 as x) | Bit(1 as x):
-                return f"{x ^ 1}"
-            case x:
-                return f"(~{x})"
-
-    def eval(self) -> "Expr":
-        match self.x:
-            case Bit(0 as x) | Bit(1 as x):
-                return Bit(x ^ 1)
-            case Not(a):
-                return a
-            case x:
-                return Not(x)
-
-    def subst(self, var: str, expr: "Expr") -> "Expr":
-        result = self.x.subst(var, expr)
-        match result:
-            case Bit(0 as x) | Bit(1 as x):
-                return Bit(x ^ 1)
-            case x:
-                return Not(x)
-
-
-class And(NaryExpr):
-    def __repr__(self) -> str:
-        return f"And({repr([repr(a) for a in sorted(self.x)])})"
-
-    def __str__(self) -> str:
-        return f"({'&'.join([str(a) for a in sorted(self.x)])})"
-
-    def eval(self) -> "Expr":
-        res = [x.eval() for x in self.x]
-        # If any of the operands is 0 or an operand is the negation of another, return 0
-        if any(x == Bit(0) or Not(x) in res for x in res):
-            return Bit(0)
-        # Remove duplicates and 1s
-        res = [x for i, x in enumerate(res) if x not in res[:i] and x != Bit(1)]
-        match res:
-            # If there is only one operand, return it
-            case [x]:
-                return x
-            # If there are no operands, return 1
-            case []:
+    def simplify(self) -> "Expr":
+        match self.x.simplify():
+            case Bit(0):
                 return Bit(1)
-            # Otherwise, return the remaining operands as an And expression
-            case _:
-                return And(*res)
-
-    def subst(self, var: str, expr: "Expr") -> "Expr":
-        res = []
-        for x in self.x:
-            r = x.subst(var, expr)
-            if r == Bit(0):
+            case Bit(1):
                 return Bit(0)
-            elif r != Bit(1):
-                res.append(r)
-        return And(*res)
-
-
-class Or(NaryExpr):
-    def __repr__(self) -> str:
-        return f"Or({repr([repr(a) for a in sorted(self.x)])})"
-
-    def __str__(self) -> str:
-        return f"({'|'.join([str(a) for a in sorted(self.x)])})"
-
-    def eval(self) -> "Expr":
-        res = [x.eval() for x in self.x]
-        # If any of the operands is 1 or an operand is the negation of another, return 1
-        if any(x == Bit(1) or Not(x) in res for x in res):
-            return Bit(1)
-        # Remove duplicates and 0s
-        res = [x for i, x in enumerate(res) if x not in res[:i] and x != Bit(0)]
-        match res:
-            # If there is only one operand, return it
-            case [x]:
+            case Not(x):
                 return x
-            # If there are no operands, return 0
-            case []:
-                return Bit(0)
-            # Otherwise, return the remaining operands as an Or expression
-            case _:
-                return Or(*res)
-
-    def subst(self, var: str, expr: "Expr") -> "Expr":
-        res = []
-        for x in self.x:
-            r = x.subst(var, expr)
-            if r == Bit(1):
-                return Bit(1)
-            elif r != Bit(0):
-                res.append(r)
-        if len(res) == 0:
-            return Bit(0)
-        elif len(res) == 1:
-            return res[0]
-        else:
-            return Or(*res)
-
-
-class Xor(NaryExpr):
-    def __repr__(self) -> str:
-        return f"Xor({repr([repr(a) for a in sorted(self.x)])})"
-
-    def __str__(self) -> str:
-        return f"({'^'.join([str(a) for a in sorted(self.x)])})"
-
-    def eval(self) -> "Expr":
-        res = [x.eval() for x in self.x]
-        while True:
-            # Filter out duplicate and negated operands
-            dups = [x for x in res if res.count(x) > 1]
-            negs = [x for x in res if Not(x) in res]
-            res = [x for x in res if x not in dups and x not in negs]
-            # If there are no duplicates or negations, break
-            if not dups and not negs:
-                break
-            # Otherwise, replace each pair of duplicates with a 0 and each pair of negations with a 1
-            else:
-                res += [Bit(0)] * (len(dups) // 2)
-                res += [Bit(1)] * (len(negs) // 2)
-        match res:
-            # If there is only one operand, return it
-            case [x]:
-                return x
-            # If there are two operands and either is 0, return the other
-            case [Bit(0), x] | [x, Bit(0)]:
-                return x
-            # If there are two operands and either is 1, return the negation of the other
-            case [Bit(1), x] | [x, Bit(1)]:
+            case x:
                 return Not(x)
-            # Otherwise, return the remaining operands as an Xor expression
-            case _:
-                return Xor(*res)
 
-    def subst(self, var: str, expr: "Expr") -> "Expr":
-        res = []
-        for x in self.x:
-            r = x.subst(var, expr)
-            if r == Bit(0):
+
+class And(Expr):
+    x: list[Expr]
+
+    def __init__(self, *args: "Expr"):
+        assert (
+            len(args) > 1 and all(isinstance(a, Expr) for a in args)
+        ), f"Invalid arguments for an And expression: {args}. Expected a list of expressions."
+        self.x = list(args)
+
+    def simplify(self) -> "Expr":
+        ops = []
+        for a in self.x:
+            expr = a.simplify()
+            if expr == Bit(0):
+                return Bit(0)
+            elif expr == Bit(1):
                 continue
+            elif type(expr) is And:
+                ops.extend(expr.x)
             else:
-                res.append(r)
-        return Xor(*res)
+                ops.append(expr)
+
+        i = 1
+        while i < len(ops):
+            if ops[i] in ops[:i]:
+                ops.remove(ops[i])
+            elif Not(ops[i]) in ops[:i]:
+                return Bit(0)
+            else:
+                i += 1
+
+        if len(ops) == 0:
+            return Bit(1)
+        if len(ops) == 1:
+            return ops[0]
+        else:
+            return And(*ops)
+
+
+class Or(Expr):
+    x: list[Expr]
+
+    def __init__(self, *args: "Expr"):
+        assert (
+            len(args) > 1 and all(isinstance(a, Expr) for a in args)
+        ), f"Invalid arguments for an Or expression: {args}. Expected a list of expressions."
+        self.x = list(args)
+
+    def simplify(self) -> "Expr":
+        ops = []
+        for a in self.x:
+            expr = a.simplify()
+            if expr == Bit(1):
+                return Bit(1)
+            elif expr == Bit(0):
+                continue
+            elif type(expr) is Or:
+                ops.extend(expr.x)
+            else:
+                ops.append(expr)
+
+        i = 1
+        while i < len(ops):
+            if ops[i] in ops[:i]:
+                ops.remove(ops[i])
+            elif Not(ops[i]) in ops[:i]:
+                return Bit(1)
+            else:
+                i += 1
+
+        if len(ops) == 0:
+            return Bit(0)
+        if len(ops) == 1:
+            return ops[0]
+        else:
+            return Or(*ops)
+
+
+class Xor(Expr):
+    x: list[Expr]
+
+    def __init__(self, *args: "Expr"):
+        assert (
+            len(args) > 1 and all(isinstance(a, Expr) for a in args)
+        ), f"Invalid arguments for an Xor expression: {args}. Expected a list of expressions."
+        self.x = list(args)
+
+    def simplify(self) -> "Expr":
+        ops = []
+        for a in self.x:
+            expr = a.simplify()
+            if expr == Bit(0):
+                continue
+            elif type(expr) is Xor:
+                ops.extend(expr.x)
+            else:
+                ops.append(expr)
+
+        i = 1
+        while i < len(ops):
+            if ops[i] in ops[:i]:
+                j = ops[:i].index(ops[i])
+                ops.pop(i)
+                ops.pop(j)
+                ops.append(Bit(0))
+            else:
+                i += 1
+
+        if len(ops) == 0:
+            return Bit(0)
+        if len(ops) == 1:
+            return ops[0]
+        else:
+            return Xor(*ops)
 
 
 class UInt:
@@ -373,7 +329,7 @@ class UInt:
         ```python
         UInt(0b01011010)  # An 8-bit UInt representing the value `0b01011010`
         UInt('x', 8)      # An 8-bit UInt with bits ['x[7]', 'x[6]', 'x[5]', 'x[4]', 'x[3]', 'x[2]', 'x[1]', 'x[0]']
-        UInt([Bit(a), Bit(1), Bit(0), Bit(1)])  # A 4-bit UInt representing the value `0ba010`, where `a` is an unknown bit.
+        UInt([Bit(a), Bit(1), Bit(0), Bit(1)])  # A 4-bit UInt representing the value `0ba101`, where `a` is a bit variable.
         ```
         """
         if type(bits) is int:
@@ -381,7 +337,7 @@ class UInt:
         elif type(bits) is str:
             this = UInt.from_label(bits, width)
         else:
-            this = UInt.from_exprs(bits)
+            this = UInt.from_exprs(list(reversed(bits)))
         self.bits = this.bits
 
     def __new__(cls, *args, **kwargs):
@@ -446,21 +402,21 @@ class UInt:
         Bitwise `and` operation
         """
         self.assert_similar(other)
-        return UInt.from_exprs([(a & b).eval() for a, b in zip(self.bits, other.bits)])
+        return UInt.from_exprs([(a & b) for a, b in zip(self.bits, other.bits)])
 
     def __or__(self, other) -> "UInt":
         """
         Bitwise `or` operation
         """
         self.assert_similar(other)
-        return UInt.from_exprs([(a | b).eval() for a, b in zip(self.bits, other.bits)])
+        return UInt.from_exprs([(a | b) for a, b in zip(self.bits, other.bits)])
 
     def __xor__(self, other) -> "UInt":
         """
         Bitwise `xor` operation
         """
         self.assert_similar(other)
-        return UInt.from_exprs([(a ^ b).eval() for a, b in zip(self.bits, other.bits)])
+        return UInt.from_exprs([(a ^ b) for a, b in zip(self.bits, other.bits)])
 
     def __invert__(self) -> "UInt":
         """
@@ -508,9 +464,16 @@ class UInt:
         Converts the UInt to an integer. If the UInt contains any bits other
         than `0` or `1`, raises a ValueError.
         """
-        if not all(isinstance(b.eval().x, int) for b in self.bits):
-            raise ValueError(f"Cannot convert to int. {self} contains non-binary bits.")
-        return int("".join(str(bit) for bit in self.bits), 2)
+        result = 0
+        for i, bit in enumerate(self.bits):
+            match bit.to_int():
+                case None:
+                    raise ValueError(
+                        f"Cannot convert to int. {self} contains non-binary bits."
+                    )
+                case 1:
+                    result |= 1 << i
+        return result
 
     def assert_similar(self, other):
         """
@@ -586,8 +549,10 @@ class UInt:
     @classmethod
     def from_exprs(cls, exprs: list[Expr]) -> "UInt":
         """
-        Constructs a UInt from the list of expressions, interpreting each expression as a bit. The first expression
-        in the list will be the least significant bit. Raises a ValueError if `exprs` is not a list of expressions.
+        Constructs a UInt from the list of expressions, interpreting each expression as a bit. Note that the first
+        expression in the list will become the most significant bit.
+
+        Raises a ValueError if `exprs` is not a list of expressions.
         """
         if not all(isinstance(expr, Expr) for expr in exprs):
             raise ValueError(f"Expected a list of expressions, got {exprs}.")
