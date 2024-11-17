@@ -392,7 +392,7 @@ class UInt:
         zero = UInt.from_value(0, self.width())
         prod = zero
         while a != zero:
-            prod += UInt.from_exprs([Bit(1) & a[0]] * self.width()) & b
+            prod += UInt.from_exprs([(Bit(1) & a[0]).simplify()] * self.width()) & b
             a >>= 1
             b <<= 1
         return prod
@@ -402,21 +402,27 @@ class UInt:
         Bitwise `and` operation
         """
         self.assert_similar(other)
-        return UInt.from_exprs([(a & b) for a, b in zip(self.bits, other.bits)])
+        return UInt.from_exprs(
+            [(a & b).simplify() for a, b in zip(self.bits, other.bits)]
+        )
 
     def __or__(self, other) -> "UInt":
         """
         Bitwise `or` operation
         """
         self.assert_similar(other)
-        return UInt.from_exprs([(a | b) for a, b in zip(self.bits, other.bits)])
+        return UInt.from_exprs(
+            [(a | b).simplify() for a, b in zip(self.bits, other.bits)]
+        )
 
     def __xor__(self, other) -> "UInt":
         """
         Bitwise `xor` operation
         """
         self.assert_similar(other)
-        return UInt.from_exprs([(a ^ b) for a, b in zip(self.bits, other.bits)])
+        return UInt.from_exprs(
+            [(a ^ b).simplify() for a, b in zip(self.bits, other.bits)]
+        )
 
     def __invert__(self) -> "UInt":
         """
@@ -485,66 +491,11 @@ class UInt:
         if self.width() != other.width():
             raise ValueError("UInt bit widths must be equal.")
 
-    def compress(self, mask) -> "UInt":
-        """
-        Moves the masked bits in `x` to the right and sets the rest to 0.
-        """
-        from math import log2
-
-        x = self
-        steps = int(log2(x.width()))
-        assert 2**steps == x.width(), "Bit width must be a power of 2."
-
-        x &= mask
-        mk = ~mask << 1
-        for i in range(steps):
-            p = 1
-            mp = mk ^ (mk << p)
-            for _ in range(steps - 1):
-                p *= 2
-                mp = mp ^ (mp << p)
-            mv = mp & mask
-            mask = (mask ^ mv) | (mv >> (1 << i))
-            t = x & mv
-            x = x ^ t | (t >> (1 << i))
-            mk &= ~mp
-        return x
-
     def concat(self, other: "UInt") -> "UInt":
         """
         Concatenates two UInts
         """
         return UInt.from_exprs(self.bits + other.bits)
-
-    def delta_swap(self, mask, shift) -> "UInt":
-        """
-        Returns a value with the masked bits in `self` moved to the left by `shift` positions. For this function
-        to work properly, the mask and the shifted mask should not overlap, ie. `mask & (mask << shift) == 0`
-        and no bits should be shifted out of the 64-bit integer, ie. `((mask << shift) >> shift) == mask`.
-        """
-        x = self
-        t = ((x >> shift) ^ x) & mask
-        return (x ^ t) ^ (t << shift)
-
-    def delta_exchange(self, other, mask, shift) -> tuple["UInt", "UInt"]:
-        """
-        Exchanges the masked bits in `self` with the bits in `other` masked by `mask << shift` and returns
-        resulting UInts without modifying the original values. For this function to work properly, no bits
-        should be shifted out of the 64-bit integers, ie. `((mask << shift) >> shift) == mask`.
-        """
-        x = self
-        t = ((other >> shift) ^ x) & mask
-        return (x ^ t), (other ^ (t << shift))
-
-    def exchange(self, other, mask) -> tuple["UInt", "UInt"]:
-        """
-        Exchanges the masked bits between `self` and `other` and returns the resulting UInts without modifying the
-        original values.
-        """
-        x = self ^ other
-        y = other ^ (x & mask)
-        x = x ^ y
-        return x, y
 
     @classmethod
     def from_exprs(cls, exprs: list[Expr]) -> "UInt":
@@ -612,7 +563,7 @@ class UInt:
         Rotates the bits left by `n` positions
         """
         assert n >= 0, "Shift must be non-negative."
-        rotated = self.bits[-n:] + self.bits[:-n] if n > 0 else self.bits
+        rotated = self.bits[n:] + self.bits[:n]
         return UInt.from_exprs(rotated)
 
     def rotate_right(self, n) -> "UInt":
@@ -620,7 +571,7 @@ class UInt:
         Rotates the bits right by `n` positions
         """
         assert n >= 0, "Shift must be non-negative."
-        rotated = self.bits[n:] + self.bits[:n]
+        rotated = self.bits[-n:] + self.bits[:-n] if n > 0 else self.bits
         return UInt.from_exprs(rotated)
 
     def set_width(self, width):
