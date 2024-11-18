@@ -99,9 +99,10 @@ class Expr:
                 return set().union(*[a.vars() for a in x])
 
     def __eq__(self, other: "Expr") -> bool:
-        repr_self = repr(self.anf())
-        repr_other = repr(other.anf())
-        return repr_self == repr_other
+        if repr(self) == repr(other):
+            return True
+        else:
+            return repr(self.anf()) == repr(other.anf())
 
     def __hash__(self) -> int:
         return hash(repr(self.anf()))
