@@ -564,7 +564,7 @@ class UInt:
         Rotates the bits left by `n` positions
         """
         assert n >= 0, "Shift must be non-negative."
-        rotated = self.bits[n:] + self.bits[:n]
+        rotated = self.bits[-n:] + self.bits[:-n] if n > 0 else self.bits
         return UInt.from_exprs(rotated)
 
     def rotate_right(self, n) -> "UInt":
@@ -572,7 +572,7 @@ class UInt:
         Rotates the bits right by `n` positions
         """
         assert n >= 0, "Shift must be non-negative."
-        rotated = self.bits[-n:] + self.bits[:-n] if n > 0 else self.bits
+        rotated = self.bits[n:] + self.bits[:n]
         return UInt.from_exprs(rotated)
 
     def set_width(self, width):
