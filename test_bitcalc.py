@@ -49,6 +49,9 @@ def test_uint_simple():
     assert one + one == two
     assert two * one == two
 
+    # Overflow:
+    assert UInt(3, 2) + UInt(3, 2) == UInt(2, 2)
+
     a, b, c, d = Bit("a"), Bit("b"), Bit("c"), Bit("d")
     _0 = Bit(0)
     _1 = Bit(1)
@@ -71,24 +74,27 @@ def test_uint_simple():
 def test_uint_randomized():
     from random import randrange
 
-    COUNT = 10
-    WIDTH = 32
+    COUNT = 1000
+    WIDTH = 8
     MAX = 2**WIDTH
     MASK = MAX - 1
 
-    def shr(x, n):
-        return MASK & (x >> n)
-
-    def shl(x, n):
-        return MASK & (x << n)
+    def rotl(x, n):
+        n %= WIDTH
+        return trunc((x << n) | (x >> (WIDTH - n)))
 
     def rotr(x, n):
         n %= WIDTH
-        return MASK & ((x << n) | (x >> (WIDTH - n)))
+        return trunc((x >> n) | (x << (WIDTH - n)))
 
-    def rotl(x, n):
-        n %= WIDTH
-        return MASK & ((x >> n) | (x << (WIDTH - n)))
+    def shl(x, n):
+        return trunc(x << n)
+
+    def shr(x, n):
+        return trunc(x >> n)
+
+    def trunc(x):
+        return MASK & x
 
     for i in range(COUNT):
         a = randrange(MAX)
@@ -97,20 +103,19 @@ def test_uint_randomized():
         uint_a = UInt(a, WIDTH)
         uint_b = UInt(b, WIDTH)
 
-        assert int(a) == int(uint_a)
-        assert int(b) == int(uint_b)
-        assert int(shl(a, 2)) == int(uint_a << 2)
-        assert int(shr(a, 2)) == int(uint_a >> 2)
-        assert int(rotl(a, 2)) == int(uint_a.rotate_left(2))
-        assert int(rotr(a, 2)) == int(uint_a.rotate_right(2))
-        
-        assert int(a + b) == int(uint_a + uint_b)
-        assert int(a * b) == int(uint_a * uint_b)
-        assert int(a & b) == int(uint_a & uint_b)
-        assert int(a | b) == int(uint_a | uint_b)
-        assert int(a ^ b) == int(uint_a ^ uint_b)
-        assert int(~a) == int(~uint_a)
-        
+        assert trunc(a) == int(uint_a)
+        assert trunc(b) == int(uint_b)
+        assert trunc(shl(a, 2)) == int(uint_a << 2)
+        assert trunc(shr(a, 2)) == int(uint_a >> 2)
+        assert trunc(rotl(a, 2)) == int(uint_a.rotate_left(2))
+        assert trunc(rotr(a, 2)) == int(uint_a.rotate_right(2))
+
+        assert trunc(a + b) == int(uint_a + uint_b)
+        assert trunc(a * b) == int(uint_a * uint_b)
+        assert trunc(a & b) == int(uint_a & uint_b)
+        assert trunc(a | b) == int(uint_a | uint_b)
+        assert trunc(a ^ b) == int(uint_a ^ uint_b)
+        assert trunc(~a) == int(~uint_a)
 
 
 def test_simplify():
