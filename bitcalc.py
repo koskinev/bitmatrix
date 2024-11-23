@@ -34,13 +34,7 @@ class Expr:
             h = And(Bit(v), Xor(x0, x1)).anf(ig)
 
             # Combine the results
-            match g, h:
-                case Bit(0), h:
-                    return h
-                case g, Bit(0):
-                    return g
-                case _, _:
-                    return Xor(g, h).simplify()
+            return Xor(g, h).simplify()
 
     def is_anf(self) -> bool:
         """
@@ -133,8 +127,6 @@ class Expr:
 
     def __eq__(self, other: "Expr") -> bool:
         if repr(self) == repr(other):
-            return True
-        elif repr(self.simplify()) == repr(other.simplify()):
             return True
         else:
             return repr(self.anf()) == repr(other.anf())
