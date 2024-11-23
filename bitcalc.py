@@ -86,6 +86,27 @@ class Expr:
                 result = type(self)(*x)
                 return result.simplify()
 
+    def truth_table(self) -> list[int]:
+        """
+        Returns the expression's truth table. The truth table is a list of integers where each integer
+        represents the binary value of the variables that make the expression true, when the variables are
+        ordered alphabetically.
+
+        For example, the expression `a & b` will return `[3]` because the expression is true when `a=1`
+        and `b=1`.
+        """
+        vars = sorted(self.vars())
+        table = []
+        for i in range(2 ** len(vars)):
+            bits = bin(i)[2:].zfill(len(vars))
+            vars = {var: int(bits[j]) for j, var in enumerate(vars)}
+            expr = self
+            for var, val in vars.items():
+                expr = expr.subst(var, Bit(val))
+            if expr.to_int() == 1:
+                table.append(i)
+        return table
+
     def to_int(self) -> int | None:
         """
         Tries to convert the expression to an integer. If the expression contains any bits other
