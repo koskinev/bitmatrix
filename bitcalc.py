@@ -67,7 +67,6 @@ class Expr:
         """
         Simplifies the expression
         """
-        return self
 
     def subst(self, var: str, expr: "Expr") -> "Expr":
         """
@@ -113,10 +112,8 @@ class Expr:
         than `0` or `1`, returns `None`.
         """
         match self.simplify():
-            case Bit(0):
-                return 0
-            case Bit(1):
-                return 1
+            case Bit(n) if n in (0, 1):
+                return n
             case _:
                 return None
 
@@ -137,34 +134,13 @@ class Expr:
     def __eq__(self, other: "Expr") -> bool:
         if repr(self) == repr(other):
             return True
+        elif repr(self.simplify()) == repr(other.simplify()):
+            return True
         else:
             return repr(self.anf()) == repr(other.anf())
 
-    def __hash__(self) -> int:
-        return hash(repr(self.anf()))
-
     def __lt__(self, other: "Expr") -> bool:
-        match self, other:
-            case Bit(_), Bit(_):
-                if type(self.x) is type(other.x):
-                    return self.x < other.x
-                else:
-                    return type(self.x) is int
-            case Bit(_), Expr(_):
-                return True
-            case Expr(_), Bit(_):
-                return False
-            case And(_), And(_) | Or(_), Or(_) | Xor(_), Xor(_):
-                if len(self.x) < len(other.x):
-                    return True
-                elif len(self.x) > len(other.x):
-                    return False
-                else:
-                    lhs = [sorted(self.x)]
-                    rhs = [sorted(other.x)]
-                    return lhs < rhs
-            case _:
-                return self.name < other.name
+        repr(self) < repr(other)
 
     def __and__(self, other: "Expr") -> "Expr":
         return And(self, other)
@@ -182,11 +158,11 @@ class Expr:
             case Not(x):
                 return f"~{x}"
             case And(x):
-                return f"({'&'.join([str(a) for a in sorted(x)])})"
+                return f"({' & '.join(sorted([str(a) for a in x]))})"
             case Or(x):
-                return f"({'|'.join([str(a) for a in sorted(x)])})"
+                return f"({' | '.join(sorted([str(a) for a in x]))})"
             case Xor(x):
-                return f"({'^'.join([str(a) for a in sorted(self.x)])})"
+                return f"({' ^ '.join(sorted([str(a) for a in x]))})"
 
     def __repr__(self) -> str:
         match self:
@@ -194,12 +170,8 @@ class Expr:
                 return f"Bit({x})"
             case Not(x):
                 return f"Not({repr(x)})"
-            case And(x):
-                return f"And({repr([repr(a) for a in sorted(x)])})"
-            case Or(x):
-                return f"Or({repr([repr(a) for a in sorted(x)])})"
-            case Xor(x):
-                return f"Xor({repr([repr(a) for a in sorted(x)])})"
+            case And(x) | Or(x) | Xor(x):
+                return f"{self.name}({', '.join(sorted([repr(a) for a in x]))})"
 
     def __xor__(self, other: "Expr") -> "Expr":
         return Xor(self, other)
@@ -229,10 +201,8 @@ class Not(Expr):
 
     def simplify(self) -> "Expr":
         match self.x.simplify():
-            case Bit(0):
-                return Bit(1)
-            case Bit(1):
-                return Bit(0)
+            case Bit(n) if n in (0, 1):
+                return Bit(~n & 1)
             case Not(x):
                 return x
             case x:
@@ -251,15 +221,15 @@ class And(Expr):
     def simplify(self) -> "Expr":
         ops = []
         for a in self.x:
-            expr = a.simplify()
-            if expr == Bit(0):
-                return Bit(0)
-            elif expr == Bit(1):
-                continue
-            elif type(expr) is And:
-                ops.extend(expr.x)
-            else:
-                ops.append(expr)
+            match a.simplify():
+                case Bit(0):
+                    return Bit(0)
+                case Bit(1):
+                    continue
+                case And(x):
+                    ops.extend(x)
+                case expr:
+                    ops.append(expr)
 
         i = 1
         while i < len(ops):
@@ -290,15 +260,15 @@ class Or(Expr):
     def simplify(self) -> "Expr":
         ops = []
         for a in self.x:
-            expr = a.simplify()
-            if expr == Bit(1):
-                return Bit(1)
-            elif expr == Bit(0):
-                continue
-            elif type(expr) is Or:
-                ops.extend(expr.x)
-            else:
-                ops.append(expr)
+            match a.simplify():
+                case Bit(1):
+                    return Bit(1)
+                case Bit(0):
+                    continue
+                case Or(x):
+                    ops.extend(x)
+                case x:
+                    ops.append(x)
 
         i = 1
         while i < len(ops):
@@ -329,13 +299,13 @@ class Xor(Expr):
     def simplify(self) -> "Expr":
         ops = []
         for a in self.x:
-            expr = a.simplify()
-            if expr == Bit(0):
-                continue
-            elif type(expr) is Xor:
-                ops.extend(expr.x)
-            else:
-                ops.append(expr)
+            match a.simplify():
+                case Bit(0):
+                    continue
+                case Xor(x):
+                    ops.extend(x)
+                case expr:
+                    ops.append(expr)
 
         i = 1
         while i < len(ops):
@@ -417,7 +387,7 @@ class UInt:
         Unsigned, modular subtraction.
         """
         self.assert_similar(other)
-        negated = ~other + UInt.from_exprs([Bit(0)] * (self.width() - 1) + [Bit(1)])
+        negated = ~other + UInt.from_exprs([Bit(1)] + [Bit(0)] * (self.width() - 1))
         return self + negated
 
     def __mul__(self, other) -> "UInt":
