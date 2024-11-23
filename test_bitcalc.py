@@ -188,6 +188,15 @@ def test_uint_simple():
     assert x.rotate_left(1) == UInt([c, b, a, d])
     assert x.rotate_right(1) == UInt([a, d, c, b])
 
+    with pytest.raises(ValueError):
+        int(x)  # Cannot convert to int if not all bits are known
+
+    with pytest.raises(ValueError):
+        x.assert_similar(a)  # UInt and Bit are not similar
+
+    with pytest.raises(ValueError):
+        x.assert_similar(one)  # UInts with different widths are not similar
+
 
 def test_uint_randomized():
     from random import randrange
