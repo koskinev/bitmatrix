@@ -9,23 +9,38 @@ class Expr:
         """
         Returns the algebraic normal form of the expression
         """
-        match self.simplify():
-            case expr if expr.is_anf():
-                return expr
-            case expr:
-                # Select the variable to substitute and add it to the ignore list
-                vars = [v for v in expr.vars() if v not in ignore]
-                v = vars.pop()
-                ig = ignore + [v]
+        expr = self.simplify()
+        while True:
+            simpler = expr.simplify()
+            if repr(simpler) == repr(expr):
+                break
+            else:
+                expr = simpler
 
-                # Substitute the variable with 0 and 1
-                x0 = expr.subst(v, Bit(0))
-                x1 = expr.subst(v, Bit(1))
+        if expr.is_anf():
+            return expr
+        else:
+            # Select the variable to substitute and add it to the ignore list
+            vars = [v for v in expr.vars() if v not in ignore]
+            v = vars.pop()
+            ig = ignore + [v]
 
-                # Recursively calculate the ANF
-                g = x0.anf(ig)
-                h = And(Bit(v), Xor(x0, x1)).anf(ig)
-                return Xor(g, h).simplify()
+            # Substitute the variable with 0 and 1
+            x0 = expr.subst(v, Bit(0))
+            x1 = expr.subst(v, Bit(1))
+
+            # Recursively calculate the ANF
+            g = x0.anf(ig)
+            h = And(Bit(v), Xor(x0, x1)).anf(ig)
+
+            # Combine the results
+            match g, h:
+                case Bit(0), h:
+                    return h
+                case g, Bit(0):
+                    return g
+                case _, _:
+                    return Xor(g, h).simplify()
 
     def is_anf(self) -> bool:
         """
