@@ -38,12 +38,14 @@ def test_eq():
     assert ~(a & b) == ~a | ~b
 
 
-def test_randomized():
-    from random import randrange
+def test_eq_randomized():
+    from random import choices, randrange
 
     BITS = 3
-    MIN_COUNT = 10
-    tt_exprs = {}
+    MIN_EQUAL = 10
+    TEST_INEQUAL = 10
+
+    exprs, equal = {}, 0
 
     def rand_bit() -> Bit:
         return Bit(chr(ord("a") + randrange(BITS)))
@@ -57,33 +59,32 @@ def test_randomized():
             case 2:
                 return Xor
 
-    # Generate at least MIN_COUNT truth tables with at least two expressions each.
-    while sum(1 for e in tt_exprs.values() if len(e) > 1) < MIN_COUNT:
+    # Loop while the number of equal expressions found is less than MIN_EQUAL.
+    while equal < MIN_EQUAL:
+        # Generate a random expression.
         expr = rand_bit()
         while len(expr.vars()) < BITS:
             rhs = rand_op()(rand_bit(), rand_bit())
             expr = rand_op()(expr, rhs).simplify()
 
         tt = str(expr.truth_table())
+        anf = expr.anf()
 
-        # If the expression is already in the dictionary, skip it.
-        if repr(expr) not in [repr(e) for e in tt_exprs.get(tt, [])]:
-            tt_exprs[tt] = tt_exprs.get(tt, []) + [expr]
+        # If the truth table is already present, verify that the expression's ANF is equal
+        # to the one stored.
+        if tt in exprs:
+            assert repr(anf) == repr(exprs[tt])
+            equal += 1
+        else:
+            exprs[tt] = anf
 
-    # Check that all expressions with the same truth table are equal.
-    for tt, exprs in tt_exprs.items():
-        for i, expr_a in enumerate(exprs):
-            for expr_b in exprs[:i]:
-                assert expr_a == expr_b
-
-    # Keep the first expression for each truth table.
-    exprs = [exprs[0] for exprs in tt_exprs.values()]
-
-    # Check that no two expressions in the list are equal.
-    for a in exprs:
-        for b in exprs:
-            if a == b:
-                assert repr(a) == repr(b)
+        # Assert that every anf with a different truth table is not equal to the current expression.
+        others = list(exprs.items())
+        if len(others) > TEST_INEQUAL:
+            others = choices(others, k=TEST_INEQUAL)
+        for ott, oanf in others:
+            if ott != tt:
+                assert repr(anf) != repr(oanf)
 
 
 def test_simplify():
@@ -156,6 +157,8 @@ def test_truth_table():
 
 
 def test_uint_simple():
+    import pytest
+
     print("Testing simple uint ops...")
     # Basic operations:
 
