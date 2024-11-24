@@ -9,14 +9,8 @@ class Expr:
         """
         Returns the algebraic normal form of the expression
         """
-        expr = self.simplify()
-        while True:
-            simpler = expr.simplify()
-            if repr(simpler) == repr(expr):
-                break
-            else:
-                expr = simpler
 
+        expr = self.simplify()
         if expr.is_anf():
             return expr
         else:
@@ -59,8 +53,69 @@ class Expr:
 
     def simplify(self) -> "Expr":
         """
-        Simplifies the expression
+        Simplifies the expression.
         """
+        recurse = False
+        match self:
+            case Bit(_):
+                return self
+            case Not(Not(x)):
+                return x.simplify()
+            case Not(Bit(n)) if n in (0, 1):
+                return Bit(~n & 1)
+            case Not(x):
+                return Not(x.simplify())
+            case And(x) | Or(x) | Xor(x):
+                t = []
+                for e in x:
+                    e = e.simplify()
+                    match e, self:
+                        # Ignore 1s in AND and 0s in OR and XOR
+                        case (Bit(1), And(_)) | (Bit(0), (Or(_) | Xor(_))):
+                            continue
+                        # 0 in AND gives 0, 1 in OR gives 1
+                        case (Bit(0), And(_)) | (Bit(1), Or(_)):
+                            return e
+                        # Ignore duplicate bits in AND and OR
+                        case (_, (And(_) | Or(_))) if e in t:
+                            continue
+                        # Negated duplicate bits in AND give 0
+                        case (_, And(_)) if Not(e) in t:
+                            return Bit(0)
+                        # Negated duplicate bits in OR give 1
+                        case (_, Or(_)) if Not(e) in t:
+                            return Bit(1)
+                        # Replace duplicates with 0 in XOR
+                        case (_, Xor(_)) if e in t:
+                            t.remove(e)
+                            t.append(Bit(0))
+                            recurse = True
+                        # Replace negated duplicate bits with 1 in XOR
+                        case (_, Xor(_)) if Not(e) in t:
+                            t.remove(Not(e))
+                            t.append(Bit(1))
+                            recurse = True
+                        # If the expression has the same type as self, merge the lists
+                        case _ if type(e) is type(self):
+                            t.extend(e.x)
+                            recurse = True
+                        # Otherwise, add the expression to the list
+                        case _:
+                            t.append(e)
+            case e:
+                raise RuntimeError("Reached code that should be unreachable.")
+
+        match self:
+            case And(_) if len(t) == 0:
+                return Bit(1)
+            case Or(_) | Xor(_) if len(t) == 0:
+                return Bit(0)
+            case _ if len(t) == 1:
+                return t[0]
+            case _ if not recurse:
+                return type(self)(*t)
+            case _:
+                return type(self)(*t).simplify()
 
     def subst(self, var: str, expr: "Expr") -> "Expr":
         """
@@ -79,7 +134,7 @@ class Expr:
                 result = type(self)(*x)
                 return result.simplify()
 
-    def truth_table(self) -> list[int]:
+    def tt(self) -> list[int]:
         """
         Returns the expression's truth table. The truth table is a list of integers where each integer
         represents the binary value of the variables that make the expression true, when the variables are
@@ -111,28 +166,38 @@ class Expr:
             case _:
                 return None
 
-    def vars(self) -> set[str]:
+    def vars(self) -> list[str]:
         """
         Returns the variables in the expression as a set
         """
+        vars = []
         match self:
             case Bit(0) | Bit(1):
-                return {}
+                pass
             case Bit(x):
-                return {x}
+                vars.append(x)
             case Not(x):
-                return x.vars()
+                for v in x.vars():
+                    if v not in vars:
+                        vars.append(v)
             case And(x) | Or(x) | Xor(x):
-                return set().union(*[a.vars() for a in x])
+                for e in x:
+                    for v in e.vars():
+                        if v not in vars:
+                            vars.append(v)
+        return vars
 
     def __eq__(self, other: "Expr") -> bool:
-        if repr(self) == repr(other):
-            return True
+        if self.vars() == other.vars() and len(self.vars()) <= 8:
+            return self.tt() == other.tt()
+        elif all(v in self.vars() for v in other.vars()) and len(self.vars()) <= 8:
+            expr = other | self & other
+            return self.tt() == expr.tt()
+        elif all(v in other.vars() for v in self.vars()) and len(other.vars()) <= 8:
+            expr = self | self & other
+            return other.tt() == expr.tt()
         else:
-            return repr(self.anf()) == repr(other.anf())
-
-    def __lt__(self, other: "Expr") -> bool:
-        repr(self) < repr(other)
+            return str(self.anf()) == str(other.anf())
 
     def __and__(self, other: "Expr") -> "Expr":
         return And(self, other)
@@ -159,11 +224,11 @@ class Expr:
     def __repr__(self) -> str:
         match self:
             case Bit(x):
-                return f"Bit({x})"
+                return f"Bit('{x}')"
             case Not(x):
                 return f"Not({repr(x)})"
             case And(x) | Or(x) | Xor(x):
-                return f"{self.name}({', '.join(sorted([repr(a) for a in x]))})"
+                return f"{self.name}({', '.join(repr(a) for a in x)})"
 
     def __xor__(self, other: "Expr") -> "Expr":
         return Xor(self, other)
@@ -178,9 +243,6 @@ class Bit(Expr):
         ), f"Invalid argument: {x}. Expected 0, 1, or a string."
         self.x = x
 
-    def simplify(self) -> "Expr":
-        return self
-
 
 class Not(Expr):
     x: "Expr"
@@ -190,15 +252,6 @@ class Not(Expr):
             x, Expr
         ), f"Invalid argument for a Not expression: {x}. Expected an expression."
         self.x = x
-
-    def simplify(self) -> "Expr":
-        match self.x.simplify():
-            case Bit(n) if n in (0, 1):
-                return Bit(~n & 1)
-            case Not(x):
-                return x
-            case x:
-                return Not(x)
 
 
 class And(Expr):
@@ -210,35 +263,6 @@ class And(Expr):
         ), f"Invalid arguments for an And expression: {args}. Expected a list of expressions."
         self.x = list(args)
 
-    def simplify(self) -> "Expr":
-        ops = []
-        for a in self.x:
-            match a.simplify():
-                case Bit(0):
-                    return Bit(0)
-                case Bit(1):
-                    continue
-                case And(x):
-                    ops.extend(x)
-                case expr:
-                    ops.append(expr)
-
-        i = 1
-        while i < len(ops):
-            if ops[i] in ops[:i]:
-                ops.remove(ops[i])
-            elif Not(ops[i]) in ops[:i]:
-                return Bit(0)
-            else:
-                i += 1
-
-        if len(ops) == 0:
-            return Bit(1)
-        if len(ops) == 1:
-            return ops[0]
-        else:
-            return And(*ops)
-
 
 class Or(Expr):
     x: list[Expr]
@@ -249,35 +273,6 @@ class Or(Expr):
         ), f"Invalid arguments for an Or expression: {args}. Expected a list of expressions."
         self.x = list(args)
 
-    def simplify(self) -> "Expr":
-        ops = []
-        for a in self.x:
-            match a.simplify():
-                case Bit(1):
-                    return Bit(1)
-                case Bit(0):
-                    continue
-                case Or(x):
-                    ops.extend(x)
-                case x:
-                    ops.append(x)
-
-        i = 1
-        while i < len(ops):
-            if ops[i] in ops[:i]:
-                ops.remove(ops[i])
-            elif Not(ops[i]) in ops[:i]:
-                return Bit(1)
-            else:
-                i += 1
-
-        if len(ops) == 0:
-            return Bit(0)
-        if len(ops) == 1:
-            return ops[0]
-        else:
-            return Or(*ops)
-
 
 class Xor(Expr):
     x: list[Expr]
@@ -287,34 +282,6 @@ class Xor(Expr):
             len(args) > 1 and all(isinstance(a, Expr) for a in args)
         ), f"Invalid arguments for an Xor expression: {args}. Expected a list of expressions."
         self.x = list(args)
-
-    def simplify(self) -> "Expr":
-        ops = []
-        for a in self.x:
-            match a.simplify():
-                case Bit(0):
-                    continue
-                case Xor(x):
-                    ops.extend(x)
-                case expr:
-                    ops.append(expr)
-
-        i = 1
-        while i < len(ops):
-            if ops[i] in ops[:i]:
-                j = ops[:i].index(ops[i])
-                ops.pop(i)
-                ops.pop(j)
-                ops.append(Bit(0))
-            else:
-                i += 1
-
-        if len(ops) == 0:
-            return Bit(0)
-        if len(ops) == 1:
-            return ops[0]
-        else:
-            return Xor(*ops)
 
 
 class UInt:
