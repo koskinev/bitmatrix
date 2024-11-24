@@ -67,13 +67,13 @@ def test_eq_randomized():
             rhs = rand_op()(rand_bit(), rand_bit())
             expr = rand_op()(expr, rhs).simplify()
 
-        tt = str(expr.truth_table())
+        tt = str(expr.tt())
         anf = expr.anf()
 
         # If the truth table is already present, verify that the expression's ANF is equal
         # to the one stored.
         if tt in exprs:
-            assert repr(anf) == repr(exprs[tt])
+            assert str(anf) == str(exprs[tt])
             equal += 1
         else:
             exprs[tt] = anf
@@ -84,11 +84,25 @@ def test_eq_randomized():
             others = choices(others, k=TEST_INEQUAL)
         for ott, oanf in others:
             if ott != tt:
-                assert repr(anf) != repr(oanf)
+                assert str(anf) != str(oanf)
 
 
+def test_repr():
+    a = Bit("a")
+    b = Bit("b")
+    c = Bit("c")
+
+    assert repr(a) == "Bit('a')"
+    assert repr(~a) == "Not(Bit('a'))"
+    assert repr(a & b) == "And(Bit('a'), Bit('b'))"
+    assert repr(b | a) == "Or(Bit('b'), Bit('a'))"
+    assert repr((a | b) & c) == "And(Or(Bit('a'), Bit('b')), Bit('c'))"
+    assert repr((a ^ b) & c) == "And(Xor(Bit('a'), Bit('b')), Bit('c'))"
+    
 def test_simplify():
     a = Bit("a")
+    b = Bit("b")
+    c = Bit("c")
 
     def test(expr: "Expr", expect_repr: str):
         assert str(expr.simplify()) == expect_repr
@@ -123,6 +137,9 @@ def test_simplify():
     # Simplify a XOR 0
     test(a ^ Bit(0), "a")
 
+    # A more complex expression
+    test(((((a & b) ^ (a | b) ^ Bit(1)) ^ ((a & b) ^ (a | b))) & c), "c")
+
 
 def test_str():
     a = Bit("a")
@@ -149,11 +166,11 @@ def test_truth_table():
     a = Bit("a")
     b = Bit("b")
 
-    assert a.truth_table() == [1]
-    assert Not(a).truth_table() == [0]
-    assert And(a, b).truth_table() == [3]
-    assert Or(a, b).truth_table() == [1, 2, 3]
-    assert Xor(a, b).truth_table() == [1, 2]
+    assert a.tt() == [1]
+    assert Not(a).tt() == [0]
+    assert And(a, b).tt() == [3]
+    assert Or(a, b).tt() == [1, 2, 3]
+    assert Xor(a, b).tt() == [1, 2]
 
 
 def test_uint_simple():
