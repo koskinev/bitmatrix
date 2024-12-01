@@ -1,13 +1,34 @@
-from bitcalc import Expr, Bit, Not, And, Or, Xor, UInt
+from bitcalc import TT, Expr, Bit, UInt
+
+
+def test_anf():
+    a = Bit("a")
+    b = Bit("b")
+    c = Bit("c")
+    one = Bit(1)
+
+    assert a.anf() == a
+    assert ~a.anf() == one ^ a
+    assert (a | b).anf() == a ^ b ^ (a & b)
+    assert ((a | b) ^ (b | c)).anf() == a ^ c
+    assert (~(a | b)).anf() == one ^ a ^ b ^ (a & b)
+    assert ((~a & ~c) | ~b | ~c).anf() == one ^ (b & c)
+    assert ((Bit(1) ^ ~b) | (~b ^ ~c) | ~a | ~c).anf() == one
+    assert ((a | b) & c).anf() == (a & c) ^ (b & c) ^ (a & b & c)
+    assert ((a ^ c) | (c ^ ~b)).anf() == b ^ (a & b) ^ (a & c) ^ (b & c) ^ one
 
 
 def test_eq():
     a = Bit("a")
     b = Bit("b")
     c = Bit("c")
+    one = Bit(1)
 
     assert a == a
     assert a != b
+    assert ~a != one
+    assert a & b != a | b
+
 
     # Double negation
     assert a == ~(~a)
@@ -37,53 +58,62 @@ def test_eq():
     # De Morgan's laws
     assert ~(a & b) == ~a | ~b
 
+    # Misc.
+    assert one ^ b ^ (a & b) != one
 
 def test_eq_randomized():
     from random import choices, randrange
 
     BITS = 3
-    MIN_EQUAL = 10
+    MIN_EQUAL = 30
     TEST_INEQUAL = 10
 
     exprs, equal = {}, 0
 
-    def rand_bit() -> Bit:
-        return Bit(chr(ord("a") + randrange(BITS)))
+    def rand_unit() -> Bit:
+        x = chr(ord("a") + randrange(BITS))
+        match randrange(2):
+            case 0:
+                return Bit(x)
+            case 1:
+                return ~Bit(x)
 
-    def rand_op() -> "Expr":
+    def rand_op(a: Expr, b: Expr) -> "Expr":
         match randrange(3):
             case 0:
-                return And
+                return a & b
             case 1:
-                return Or
+                return a | b
             case 2:
-                return Xor
+                return a ^ b
 
     # Loop while the number of equal expressions found is less than MIN_EQUAL.
     while equal < MIN_EQUAL:
         # Generate a random expression.
-        expr = rand_bit()
+        expr = rand_unit()
         while len(expr.vars()) < BITS:
-            rhs = rand_op()(rand_bit(), rand_bit())
-            expr = rand_op()(expr, rhs).simplify()
+            a, b = rand_unit(), rand_unit()
+            rhs = rand_op(a, b)
+            expr = rand_op(expr, rhs)
 
-        tt = str(expr.tt())
+        tt = expr.tt().prune()
+        tt_rep = repr(tt)
         anf = expr.anf()
 
         # If the truth table is already present, verify that the expression's ANF is equal
         # to the one stored.
-        if tt in exprs:
-            assert str(anf) == str(exprs[tt])
+        if tt_rep in exprs:
+            assert str(anf) == str(exprs[tt_rep])
             equal += 1
         else:
-            exprs[tt] = anf
+            exprs[tt_rep] = anf
 
         # Assert that every anf with a different truth table is not equal to the current expression.
         others = list(exprs.items())
         if len(others) > TEST_INEQUAL:
             others = choices(others, k=TEST_INEQUAL)
-        for ott, oanf in others:
-            if ott != tt:
+        for ott_rep, oanf in others:
+            if ott_rep != tt_rep:
                 assert str(anf) != str(oanf)
 
 
@@ -98,47 +128,6 @@ def test_repr():
     assert repr(b | a) == "Or(Bit('b'), Bit('a'))"
     assert repr((a | b) & c) == "And(Or(Bit('a'), Bit('b')), Bit('c'))"
     assert repr((a ^ b) & c) == "And(Xor(Bit('a'), Bit('b')), Bit('c'))"
-    
-def test_simplify():
-    a = Bit("a")
-    b = Bit("b")
-    c = Bit("c")
-
-    def test(expr: "Expr", expect_repr: str):
-        assert str(expr.simplify()) == expect_repr
-
-    # Simplify a AND a
-    test(a & a, "a")
-
-    # Simplify a OR a
-    test(a | a, "a")
-
-    # Simplify a AND NOT a
-    test(a & ~a, "0")
-
-    # Simplify a OR NOT a
-    test(a | ~a, "1")
-
-    # Simplify a AND 1
-    test(a & Bit(1), "a")
-
-    # Simplify a OR 0
-    test(a | Bit(0), "a")
-
-    # Simplify a AND 0
-    test(a & Bit(0), "0")
-
-    # Simplify a OR 1
-    test(a | Bit(1), "1")
-
-    # Simplify a XOR a
-    test(a ^ a, "0")
-
-    # Simplify a XOR 0
-    test(a ^ Bit(0), "a")
-
-    # A more complex expression
-    test(((((a & b) ^ (a | b) ^ Bit(1)) ^ ((a & b) ^ (a | b))) & c), "c")
 
 
 def test_str():
@@ -146,14 +135,27 @@ def test_str():
     b = Bit("b")
     c = Bit("c")
 
+    zero = Bit(0)
+    one = Bit(1)
+
     assert str(a) == "a"
-    assert str(Not(a)) == "~a"
-    assert str(And(a, b)) == "(a & b)"
-    assert str(Or(b, a)) == "(a | b)"
-    assert str(Xor(a, b)) == "(a ^ b)"
-    assert str(And(Or(a, b), c)) == "((a | b) & c)"
-    assert str(Or(c, And(a, b))) == "((a & b) | c)"
-    assert str(Xor(And(a, b), c)) == "((a & b) ^ c)"
+    assert str(~a) == "~a"
+    assert str(a & a) == "a"
+    assert str(a | a) == "a"
+    assert str(a & ~a) == "0"
+    assert str(a | ~a) == "1"
+    assert str(a & one) == "a"
+    assert str(a | zero) == "a"
+    assert str(a & zero) == "0"
+    assert str(a | one) == "1"
+    assert str(a ^ a) == "0"
+    assert str(a ^ zero) == "a"
+    assert str(a & b) == "(a & b)"
+    assert str(b | a) == "(a | b)"
+    assert str(a ^ b) == "(a ^ b)"
+    assert str(c & (b | a)) == "((a | b) & c)"
+    assert str(c | (a & b)) == "((a & b) | c)"
+    assert str((a & b) ^ c) == "((a & b) ^ c)"
 
 
 def test_to_int():
@@ -162,15 +164,18 @@ def test_to_int():
     assert Bit("a").to_int() is None
 
 
-def test_truth_table():
+def test_tt():
     a = Bit("a")
     b = Bit("b")
+    c = Bit("c")
 
-    assert a.tt() == [1]
-    assert Not(a).tt() == [0]
-    assert And(a, b).tt() == [3]
-    assert Or(a, b).tt() == [1, 2, 3]
-    assert Xor(a, b).tt() == [1, 2]
+    assert a.tt() == TT([1], ["a"])
+    assert (~a).tt() == TT([0], ["a"])
+    assert (a & b).tt() == TT([3], ["a", "b"])
+    assert (~(a & b)).tt() == TT([0, 1, 2], ["a", "b"])
+    assert (a | b).tt() == TT([1, 2, 3], ["a", "b"])
+    assert (a ^ b).tt() == TT([1, 2], ["a", "b"])
+    assert ((Bit(1) ^ ~b) | (~b ^ ~c) | ~a | ~c).tt().prune() == TT([0], [])
 
 
 def test_uint_simple():

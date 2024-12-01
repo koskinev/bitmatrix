@@ -1,3 +1,4 @@
+from functools import reduce
 from typing import Union
 
 
@@ -5,44 +6,11 @@ class Expr:
     __match_args__ = ("x",)
     x: Union[int, str, "Expr", list["Expr"]]
 
-    def anf(self, ignore=[]) -> "Expr":
+    def anf(self) -> "Expr":
         """
         Returns the algebraic normal form of the expression
         """
-
-        expr = self.simplify()
-        if expr.is_anf():
-            return expr
-        else:
-            # Select the variable to substitute and add it to the ignore list
-            vars = [v for v in expr.vars() if v not in ignore]
-            v = vars.pop()
-            ig = ignore + [v]
-
-            # Substitute the variable with 0 and 1
-            x0 = expr.subst(v, Bit(0))
-            x1 = expr.subst(v, Bit(1))
-
-            # Recursively calculate the ANF
-            g = x0.anf(ig)
-            h = And(Bit(v), Xor(x0, x1)).anf(ig)
-
-            # Combine the results
-            return Xor(g, h).simplify()
-
-    def is_anf(self) -> bool:
-        """
-        Returns True if the expression is in algebraic normal form
-        """
-        match self:
-            case Bit(_):
-                return True
-            case Xor(x):
-                return all(a.is_anf() for a in x)
-            case And(x):
-                return all(type(a) is Bit for a in x)
-            case _:
-                return False
+        return self.tt().to_anf()
 
     @property
     def name(self) -> str:
@@ -51,116 +19,35 @@ class Expr:
         """
         return type(self).__name__
 
-    def simplify(self) -> "Expr":
+    def tt(self) -> "TT":
         """
-        Simplifies the expression.
+        Returns the truth table of the expression
         """
-        recurse = False
         match self:
-            case Bit(_):
-                return self
-            case Not(Not(x)):
-                return x.simplify()
-            case Not(Bit(n)) if n in (0, 1):
-                return Bit(~n & 1)
+            case Bit(0):
+                return TT.false()
+            case Bit(1):
+                return TT.true([])
+            case Bit(x):
+                return TT.bit(x)
             case Not(x):
-                return Not(x.simplify())
-            case And(x) | Or(x) | Xor(x):
-                t = []
-                for e in x:
-                    e = e.simplify()
-                    match e, self:
-                        # Ignore 1s in AND and 0s in OR and XOR
-                        case (Bit(1), And(_)) | (Bit(0), (Or(_) | Xor(_))):
-                            continue
-                        # 0 in AND gives 0, 1 in OR gives 1
-                        case (Bit(0), And(_)) | (Bit(1), Or(_)):
-                            return e
-                        # Ignore duplicate bits in AND and OR
-                        case (_, (And(_) | Or(_))) if e in t:
-                            continue
-                        # Negated duplicate bits in AND give 0
-                        case (_, And(_)) if Not(e) in t:
-                            return Bit(0)
-                        # Negated duplicate bits in OR give 1
-                        case (_, Or(_)) if Not(e) in t:
-                            return Bit(1)
-                        # Replace duplicates with 0 in XOR
-                        case (_, Xor(_)) if e in t:
-                            t.remove(e)
-                            t.append(Bit(0))
-                            recurse = True
-                        # Replace negated duplicate bits with 1 in XOR
-                        case (_, Xor(_)) if Not(e) in t:
-                            t.remove(Not(e))
-                            t.append(Bit(1))
-                            recurse = True
-                        # If the expression has the same type as self, merge the lists
-                        case _ if type(e) is type(self):
-                            t.extend(e.x)
-                            recurse = True
-                        # Otherwise, add the expression to the list
-                        case _:
-                            t.append(e)
-            case e:
-                raise RuntimeError("Reached code that should be unreachable.")
-
-        match self:
-            case And(_) if len(t) == 0:
-                return Bit(1)
-            case Or(_) | Xor(_) if len(t) == 0:
-                return Bit(0)
-            case _ if len(t) == 1:
-                return t[0]
-            case _ if not recurse:
-                return type(self)(*t)
-            case _:
-                return type(self)(*t).simplify()
-
-    def subst(self, var: str, expr: "Expr") -> "Expr":
-        """
-        Substitutes the variable with the given expression and returns the resulting expression.
-        If the variable is not found, returns the original expression.
-        """
-        match self:
-            case Bit(x) if x == var:
-                return expr
-            case Bit(_) as bit:
-                return bit
-            case Not(x):
-                return Not(x.subst(var, expr)).simplify()
-            case And(x) | Or(x) | Xor(x):
-                x = [a.subst(var, expr) for a in x]
-                result = type(self)(*x)
-                return result.simplify()
-
-    def tt(self) -> list[int]:
-        """
-        Returns the expression's truth table. The truth table is a list of integers where each integer
-        represents the binary value of the variables that make the expression true, when the variables are
-        ordered alphabetically.
-
-        For example, the expression `a & b` will return `[3]` because the expression is true when `a=1`
-        and `b=1`.
-        """
-        vars = sorted(self.vars())
-        table = []
-        for i in range(2 ** len(vars)):
-            bits = bin(i)[2:].zfill(len(vars))
-            vars = {var: int(bits[j]) for j, var in enumerate(vars)}
-            expr = self
-            for var, val in vars.items():
-                expr = expr.subst(var, Bit(val))
-            if expr.to_int() == 1:
-                table.append(i)
-        return table
+                return ~(x.tt())
+            case And(x):
+                tts = [e.tt() for e in x]
+                return reduce(lambda a, b: a & b, tts)
+            case Or(x):
+                tts = [e.tt() for e in x]
+                return reduce(lambda a, b: a | b, tts)
+            case Xor(x):
+                tts = [e.tt() for e in x]
+                return reduce(lambda a, b: a ^ b, tts)
 
     def to_int(self) -> int | None:
         """
         Tries to convert the expression to an integer. If the expression contains any bits other
         than `0` or `1`, returns `None`.
         """
-        match self.simplify():
+        match self:
             case Bit(n) if n in (0, 1):
                 return n
             case _:
@@ -168,47 +55,103 @@ class Expr:
 
     def vars(self) -> list[str]:
         """
-        Returns the variables in the expression as a set
+        Returns the variables in the expression
         """
-        vars = []
         match self:
-            case Bit(0) | Bit(1):
-                pass
+            case Bit(n) if n in (0, 1):
+                return []
             case Bit(x):
-                vars.append(x)
+                return [x]
             case Not(x):
-                for v in x.vars():
-                    if v not in vars:
-                        vars.append(v)
+                return x.vars()
             case And(x) | Or(x) | Xor(x):
-                for e in x:
-                    for v in e.vars():
-                        if v not in vars:
-                            vars.append(v)
-        return vars
+                vars = []
+                for e_vars in [e.vars() for e in x]:
+                    vars.extend(e_vars)
+                return sorted(set(vars))
+            case _:
+                return []
 
     def __eq__(self, other: "Expr") -> bool:
-        if self.vars() == other.vars() and len(self.vars()) <= 8:
-            return self.tt() == other.tt()
-        elif all(v in self.vars() for v in other.vars()) and len(self.vars()) <= 8:
-            expr = other | self & other
-            return self.tt() == expr.tt()
-        elif all(v in other.vars() for v in self.vars()) and len(other.vars()) <= 8:
-            expr = self | self & other
-            return other.tt() == expr.tt()
-        else:
-            return str(self.anf()) == str(other.anf())
+        """
+        Compares two expressions for equality
+        """
+        return self.tt() == other.tt()
 
     def __and__(self, other: "Expr") -> "Expr":
-        return And(self, other)
+        """
+        Returns the conjunction of two expressions
+        """
+        match self, other:
+            case Bit(n), Bit(m) if n in (0, 1) and m in (0, 1):
+                return Bit(n & m)
+            case (Bit(0), _) | (_, Bit(0)):
+                return Bit(0)
+            case (Bit(1), expr) | (expr, Bit(1)):
+                return expr
+            case (Bit(x), Bit(y)) if x == y:
+                return Bit(x)
+            case (And(x), And(y)):
+                return And(x + y)
+            case (a, And(x)) | (And(x), a):
+                return And([a] + x)
+            case x, y if x == Not(y):
+                return Bit(0)
+            case _:
+                return And([self, other])
+
+    def __init__(self, x):
+        """
+        Constructs an expression from a value or a list of expressions
+        """
+        if type(self) is Bit:
+            assert x in (0, 1) or type(x) is str, f"Invalid bit value: {x}"
+        elif type(self) is Not:
+            assert isinstance(x, Expr), f"Invalid expression: {x}"
+        elif type(self) in (And, Or, Xor):
+            assert type(x) is list and all(
+                isinstance(e, Expr) for e in x
+            ), f"Invalid expression list: {x}"
+        self.x = x
 
     def __invert__(self) -> "Expr":
-        return Not(self)
+        """
+        Returns the negation of the expression
+        """
+        match self:
+            case Bit(n) if n in (0, 1):
+                return Bit(~n & 1)
+            case Not(expr):
+                return expr
+            case _:
+                return Not(self)
 
     def __or__(self, other: "Expr") -> "Expr":
-        return Or(self, other)
+        """
+        Returns the disjunction of two expressions
+        """
+        match self, other:
+            case Bit(n), Bit(m) if n in (0, 1) and m in (0, 1):
+                return Bit(n | m)
+            case (Bit(1), _) | (_, Bit(1)):
+                return Bit(1)
+            case (Bit(x), Bit(y)) if x == y:
+                return Bit(x)
+            case (Bit(0), expr) | (expr, Bit(0)):
+                return expr
+            case x, y if x == Not(y):
+                return Bit(1)
+            case (Or(x), Or(y)):
+                return Or(x + y)
+            case (o, Or(x)) | (Or(x), o):
+                return Or([o] + x)
+            case _:
+                return Or([self, other])
 
     def __str__(self):
+        """
+        Returns the display representation of the expression
+        """
         match self:
             case Bit(x):
                 return f"{x}"
@@ -222,7 +165,12 @@ class Expr:
                 return f"({' ^ '.join(sorted([str(a) for a in x]))})"
 
     def __repr__(self) -> str:
+        """
+        Returns the debug representation of the expression
+        """
         match self:
+            case Bit(n) if n in (0, 1):
+                return f"Bit({n})"
             case Bit(x):
                 return f"Bit('{x}')"
             case Not(x):
@@ -231,57 +179,247 @@ class Expr:
                 return f"{self.name}({', '.join(repr(a) for a in x)})"
 
     def __xor__(self, other: "Expr") -> "Expr":
-        return Xor(self, other)
+        """
+        Returns the exclusive disjunction of two expressions
+        """
+        match self, other:
+            case Bit(n), Bit(m) if n in (0, 1) and m in (0, 1):
+                return Bit(n ^ m)
+            case (Bit(0), expr) | (expr, Bit(0)):
+                return expr
+            case (Bit(x), Bit(y)) if x == y:
+                return Bit(0)
+            case x, y if x == Not(y):
+                return Bit(1)
+            case (Xor(x), Xor(y)):
+                return Xor(x + y)
+            case (e, Xor(x)) | (Xor(x), e):
+                return Xor([e] + x)
+            case _:
+                return Xor([self, other])
 
 
 class Bit(Expr):
-    x: int | str
+    """
+    A single bit constant or variable
+    """
 
-    def __init__(self, x: int | str):
-        assert x in (0, 1) or isinstance(
-            x, str
-        ), f"Invalid argument: {x}. Expected 0, 1, or a string."
-        self.x = x
+    x: int | str
 
 
 class Not(Expr):
-    x: "Expr"
+    """
+    A negated expression
+    """
 
-    def __init__(self, x: "Expr"):
-        assert isinstance(
-            x, Expr
-        ), f"Invalid argument for a Not expression: {x}. Expected an expression."
-        self.x = x
+    x: "Expr"
 
 
 class And(Expr):
-    x: list[Expr]
+    """
+    A conjunction of expressions
+    """
 
-    def __init__(self, *args: "Expr"):
-        assert (
-            len(args) > 1 and all(isinstance(a, Expr) for a in args)
-        ), f"Invalid arguments for an And expression: {args}. Expected a list of expressions."
-        self.x = list(args)
+    x: list[Expr]
 
 
 class Or(Expr):
-    x: list[Expr]
+    """
+    A disjunction of expressions
+    """
 
-    def __init__(self, *args: "Expr"):
-        assert (
-            len(args) > 1 and all(isinstance(a, Expr) for a in args)
-        ), f"Invalid arguments for an Or expression: {args}. Expected a list of expressions."
-        self.x = list(args)
+    x: list[Expr]
 
 
 class Xor(Expr):
+    """
+    An exclusive disjunction of expressions
+    """
+
     x: list[Expr]
 
-    def __init__(self, *args: "Expr"):
-        assert (
-            len(args) > 1 and all(isinstance(a, Expr) for a in args)
-        ), f"Invalid arguments for an Xor expression: {args}. Expected a list of expressions."
-        self.x = list(args)
+
+class TT:
+    """
+    A truth table
+    """
+
+    rows: list[int]
+    vars: list[str]
+
+    def align_with(self, other: "TT") -> "TT":
+        """
+        Aligns the truth table with `other` by adding the missing variables from `other`.
+        """
+        vars = sorted(set(self.vars + other.vars))
+        missing = [i for i, v in enumerate(vars) if v not in self.vars]
+        mask = 2 ** len(vars) - 1
+        rows = self.rows
+        for i in missing:
+            low = 2**i - 1
+            high = (mask ^ low) << 1
+            zeros = [((r << 1) & high) | (r & low) for r in rows]
+            ones = [((r << 1) & high) | (r & low) | (1 << i) for r in rows]
+            rows = zeros + ones
+        return TT(sorted(rows), vars)
+
+    @classmethod
+    def bit(self, label: str) -> "TT":
+        """
+        Returns a truth table with a single bit variable
+        """
+        return TT([1], [label])
+
+    def can_prune(self, var: str) -> bool:
+        """
+        Returns whether the variable is redundant and should be pruned. A variable is redundant
+        if the result doesn't depend on it, or if it's not present in the expression.
+        """
+        if next((v for v in self.vars if v == var), None):
+            x = 1 << self.vars.index(var)
+            ones = [r for r in self.rows if r & x]
+            # nonzero = [r for r in self.rows if r]
+            if all(r ^ x in self.rows for r in ones):
+                return True
+        return False
+
+    @classmethod
+    def false(self) -> "TT":
+        """
+        Returns an empty truth table
+        """
+        return TT([], [])
+
+    def prune(self) -> "TT":
+        """
+        Removes redundant variables from the truth table
+        """
+        if self.rows == []:
+            return TT([], [])
+        elif self.rows == [0]:
+            return self
+        elif len(self.rows) == 2 ** len(self.vars):
+            return TT([0], [])
+        else:
+            vars = self.vars.copy()
+            rows = self.rows.copy()
+            extra = [v for v in vars if self.can_prune(v)]
+            while extra:
+                mask = 2 ** len(vars) - 1
+                index = vars.index(extra.pop())
+                vars.pop(index)
+                low = 2**index - 1
+                high = mask ^ low
+                rows = sorted(set(((r >> 1) & high) | (r & low) for r in rows))
+            return TT(rows, vars)
+
+    def to_anf(self) -> "Expr":
+        """
+        Converts the truth table to an algebraic normal form expression
+        """
+        tt = self.prune()
+        if tt.rows == []:
+            return Bit(0)
+        else:
+            parts = []
+            if 0 in tt.rows:
+                parts.append(Bit(1))
+                tt = (~tt).prune()
+            for r in tt.rows:
+                bits = [Bit(v) for i, v in enumerate(tt.vars) if r & (1 << i)]
+                parts.append(reduce(lambda a, b: a & b, bits))
+                # if bits:
+                # else:
+                #     x = reduce(lambda a, b: a & b, [Bit(v) for v in vars])
+                #     parts.append(Bit(1) ^ x)
+            anf = reduce(lambda a, b: a ^ b, parts)
+            return anf
+
+    @classmethod
+    def true(self, vars: list[str]) -> "TT":
+        """
+        Returns a truth table with all rows set to 1
+        """
+        size = 2 ** len(vars)
+        rows = [r for r in range(size)]
+        return TT(rows, vars)
+
+    def __init__(self, rows: list[int], vars: list[str]):
+        """
+        Constructs a truth table from a list of rows and variables
+        """
+        self.rows = rows
+        self.vars = vars
+
+    def __len__(self):
+        """
+        Returns the number of rows in the truth table
+        """
+        return len(self.table)
+
+    def __eq__(self, other: "TT") -> bool:
+        """
+        Compares two truth tables for equality
+        """
+        if self.vars != other.vars:
+            self_ok = all(o in self.vars or other.can_prune(o) for o in other.vars)
+            other_ok = all(s in other.vars or self.can_prune(s) for s in self.vars)
+            if self_ok and other_ok:
+                a = self.prune()
+                b = other.prune()
+                return a.rows == b.rows
+            else:
+                return False
+        else:
+            return self.rows == other.rows
+
+    def __and__(self, other: "TT") -> "TT":
+        """
+        Computes the intersection of two truth tables
+        """
+        a = self.align_with(other)
+        b = other.align_with(self)
+        rows = [r for r in a.rows if r in b.rows]
+        a.rows = rows
+        return a
+
+    def __or__(self, other: "TT"):
+        """
+        Computes the union of two truth tables
+        """
+        a = self.align_with(other)
+        b = other.align_with(self)
+        rows = sorted(set(a.rows + b.rows))
+        a.rows = rows
+        return a
+
+    def __xor__(self, other: "TT"):
+        """
+        Computes the symmetric difference of two truth tables
+        """
+        a = self.align_with(other)
+        b = other.align_with(self)
+        a_rows = [r for r in a.rows if r not in b.rows]
+        b_rows = [r for r in b.rows if r not in a.rows]
+        a.rows = sorted(set(a_rows + b_rows))
+        return a
+
+    def __invert__(self) -> "TT":
+        """
+        Inverts the truth table
+        """
+        every = TT.true(self.vars)
+        rows = [r for r in every if r not in self.rows]
+        return TT(rows, self.vars)
+
+    def __iter__(self):
+        """
+        Returns an iterator over the rows
+        """
+        return iter(self.rows)
+
+    def __repr__(self) -> str:
+        return f"TT({self.rows}, {self.vars})"
 
 
 class UInt:
@@ -358,7 +496,7 @@ class UInt:
         zero = UInt.from_value(0, self.width())
         prod = zero
         while a != zero:
-            prod += UInt.from_exprs([(Bit(1) & a[0]).simplify()] * self.width()) & b
+            prod += UInt.from_exprs([(Bit(1) & a[0])] * self.width()) & b
             a >>= 1
             b <<= 1
         return prod
@@ -368,27 +506,21 @@ class UInt:
         Bitwise `and` operation
         """
         self.assert_similar(other)
-        return UInt.from_exprs(
-            [(a & b).simplify() for a, b in zip(self.bits, other.bits)]
-        )
+        return UInt.from_exprs([(a & b) for a, b in zip(self.bits, other.bits)])
 
     def __or__(self, other) -> "UInt":
         """
         Bitwise `or` operation
         """
         self.assert_similar(other)
-        return UInt.from_exprs(
-            [(a | b).simplify() for a, b in zip(self.bits, other.bits)]
-        )
+        return UInt.from_exprs([(a | b) for a, b in zip(self.bits, other.bits)])
 
     def __xor__(self, other) -> "UInt":
         """
         Bitwise `xor` operation
         """
         self.assert_similar(other)
-        return UInt.from_exprs(
-            [(a ^ b).simplify() for a, b in zip(self.bits, other.bits)]
-        )
+        return UInt.from_exprs([(a ^ b) for a, b in zip(self.bits, other.bits)])
 
     def __invert__(self) -> "UInt":
         """
