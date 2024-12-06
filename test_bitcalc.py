@@ -24,11 +24,18 @@ def test_eq():
     b = Bit("b")
     c = Bit("c")
     one = Bit(1)
+    zero = Bit(0)
 
     assert a == a
     assert a != b
     assert ~a != one
     assert a & b != a | b
+    assert a & ~a == zero
+    assert a | ~a == one
+    assert a & zero == zero
+    assert a | one == one
+    assert a ^ a == zero
+    assert a ^ zero == a
 
     # Double negation
     assert a == ~(~a)
@@ -53,7 +60,11 @@ def test_eq():
     assert a ^ a == Bit(0)
 
     # Absorption
+    assert a & a == a
+    assert a | a == a
     assert a & (a | b) == a
+    assert a & one == a
+    assert a | zero == a
     assert (a | b) | (b | c) == a | b | c
 
     # De Morgan's laws
@@ -77,7 +88,7 @@ def test_len():
     assert ((a | b) & c).to_anf() == (a & c) ^ (b & c) ^ (a & b & c)
     assert ((a | b) ^ (b | c)).to_anf() == a ^ c ^ (a & b) ^ (b & c)
     assert ((a ^ c) | (c ^ ~b)).to_anf() == b ^ (a & b) ^ (a & c) ^ (b & c) ^ one
-    
+
 def test_eq_randomized():
     from random import choices, randrange
 
@@ -154,21 +165,8 @@ def test_str():
     b = Bit("b")
     c = Bit("c")
 
-    zero = Bit(0)
-    one = Bit(1)
-
     assert str(a) == "a"
     assert str(~a) == "~a"
-    assert str(a & a) == "a"
-    assert str(a | a) == "a"
-    assert str(a & ~a) == "0"
-    assert str(a | ~a) == "1"
-    assert str(a & one) == "a"
-    assert str(a | zero) == "a"
-    assert str(a & zero) == "0"
-    assert str(a | one) == "1"
-    assert str(a ^ a) == "0"
-    assert str(a ^ zero) == "a"
     assert str(a & b) == "(a & b)"
     assert str(b | a) == "(a | b)"
     assert str(a ^ b) == "(a ^ b)"
