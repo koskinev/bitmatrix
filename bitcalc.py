@@ -52,6 +52,12 @@ class Expr:
         """
         return self.to_tt().to_anf()
 
+    def to_cnf(self) -> "Expr":
+        """
+        Returns the conjunctive normal form of the expression
+        """
+        return self.to_tt().to_cnf()
+
     def to_int(self) -> int | None:
         """
         Tries to convert the expression to an integer. If the expression contains any bits other
@@ -359,7 +365,7 @@ class TT:
         Converts the truth table to an algebraic normal form expression
         """
         tt = self.prune()
-        rows, vars = tt.rows, tt.vars
+        rows, vars = tt.rows, list(enumerate(tt.vars))
         n = 2 ** len(vars)
         if rows == []:
             return Bit(0)
@@ -372,11 +378,27 @@ class TT:
                 suc = [row for row in rows if row < n - r and row + 1 not in rows]
                 rows = sorted(set(anc + suc))
                 if 0 in rows:
-                    bits = [Bit(v) for i, v in enumerate(vars) if r & (1 << i)]
+                    bits = [Bit(v) for i, v in vars if r & (1 << i)]
                     parts.append(reduce(lambda a, b: a & b, bits))
 
             anf = reduce(lambda a, b: a ^ b, parts)
             return anf
+
+    def to_cnf(self) -> "Expr":
+        """
+        Converts the truth table to a conjunctive normal form expression
+        """
+        tt = self.prune()
+        rows, vars = tt.rows, list(enumerate(tt.vars))
+        if not tt.rows:
+            return Bit(0)
+        else:
+            parts = []
+            for r in rows:
+                bits = [Bit(v) if r & (1 << i) else ~Bit(v) for i, v in vars]
+                parts.append(reduce(lambda a, b: a & b, bits))
+            cnf = reduce(lambda a, b: a | b, parts)
+            return cnf
 
     @classmethod
     def true(self, vars: list[str]) -> "TT":
@@ -508,8 +530,9 @@ class UInt:
         """
         self.assert_similar(other)
         zero = UInt.from_value(0, self.width())
-        sum = self ^ other
-        carry = self & other
+        a, b = self.copy(), other.copy()
+        sum = a ^ b
+        carry = a & b
         while carry != zero:
             shifted = carry << 1
             carry = sum & shifted
@@ -529,7 +552,7 @@ class UInt:
         Unsigned, modular multiplication.
         """
         self.assert_similar(other)
-        a, b = self, other
+        a, b = self.copy(), other.copy()
         zero = UInt.from_value(0, self.width())
         prod = zero
         while a != zero:
