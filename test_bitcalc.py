@@ -1,4 +1,5 @@
 from bitcalc import TT, Expr, Bit, UInt
+from functools import reduce
 
 
 def test_anf():
@@ -7,15 +8,15 @@ def test_anf():
     c = Bit("c")
     one = Bit(1)
 
-    assert a.anf() == a
-    assert ~a.anf() == one ^ a
-    assert (a | b).anf() == a ^ b ^ (a & b)
-    assert ((a | b) ^ (b | c)).anf() == a ^ c
-    assert (~(a | b)).anf() == one ^ a ^ b ^ (a & b)
-    assert ((~a & ~c) | ~b | ~c).anf() == one ^ (b & c)
-    assert ((Bit(1) ^ ~b) | (~b ^ ~c) | ~a | ~c).anf() == one
-    assert ((a | b) & c).anf() == (a & c) ^ (b & c) ^ (a & b & c)
-    assert ((a ^ c) | (c ^ ~b)).anf() == b ^ (a & b) ^ (a & c) ^ (b & c) ^ one
+    assert a.to_anf() == a
+    assert (~a).to_anf() == one ^ a
+    assert (a | b).to_anf() == a ^ b ^ (a & b)
+    assert (~(a | b)).to_anf() == one ^ a ^ b ^ (a & b)
+    assert ((~a & ~c) | ~b | ~c).to_anf() == one ^ (b & c)
+    assert ((Bit(1) ^ ~b) | (~b ^ ~c) | ~a | ~c).to_anf() == one
+    assert ((a | b) & c).to_anf() == (a & c) ^ (b & c) ^ (a & b & c)
+    assert ((a | b) ^ (b | c)).to_anf() == a ^ c ^ (a & b) ^ (b & c)
+    assert ((a ^ c) | (c ^ ~b)).to_anf() == b ^ (a & b) ^ (a & c) ^ (b & c) ^ one
 
 
 def test_eq():
@@ -28,7 +29,6 @@ def test_eq():
     assert a != b
     assert ~a != one
     assert a & b != a | b
-
 
     # Double negation
     assert a == ~(~a)
@@ -54,6 +54,7 @@ def test_eq():
 
     # Absorption
     assert a & (a | b) == a
+    assert (a | b) | (b | c) == a | b | c
 
     # De Morgan's laws
     assert ~(a & b) == ~a | ~b
@@ -61,6 +62,22 @@ def test_eq():
     # Misc.
     assert one ^ b ^ (a & b) != one
 
+def test_len():
+    a = Bit("a")
+    b = Bit("b")
+    c = Bit("c")
+    one = Bit(1)
+
+    assert a.to_anf() == a
+    assert (~a).to_anf() == one ^ a
+    assert (a | b).to_anf() == a ^ b ^ (a & b)
+    assert (~(a | b)).to_anf() == one ^ a ^ b ^ (a & b)
+    assert ((~a & ~c) | ~b | ~c).to_anf() == one ^ (b & c)
+    assert ((Bit(1) ^ ~b) | (~b ^ ~c) | ~a | ~c).to_anf() == one
+    assert ((a | b) & c).to_anf() == (a & c) ^ (b & c) ^ (a & b & c)
+    assert ((a | b) ^ (b | c)).to_anf() == a ^ c ^ (a & b) ^ (b & c)
+    assert ((a ^ c) | (c ^ ~b)).to_anf() == b ^ (a & b) ^ (a & c) ^ (b & c) ^ one
+    
 def test_eq_randomized():
     from random import choices, randrange
 
@@ -96,9 +113,9 @@ def test_eq_randomized():
             rhs = rand_op(a, b)
             expr = rand_op(expr, rhs)
 
-        tt = expr.tt().prune()
+        tt = expr.to_tt().prune()
         tt_rep = repr(tt)
-        anf = expr.anf()
+        anf = expr.to_anf()
 
         # If the truth table is already present, verify that the expression's ANF is equal
         # to the one stored.
@@ -121,8 +138,10 @@ def test_repr():
     a = Bit("a")
     b = Bit("b")
     c = Bit("c")
+    one = Bit(1)
 
     assert repr(a) == "Bit('a')"
+    assert repr(one) == "Bit(1)"
     assert repr(~a) == "Not(Bit('a'))"
     assert repr(a & b) == "And(Bit('a'), Bit('b'))"
     assert repr(b | a) == "Or(Bit('b'), Bit('a'))"
@@ -153,9 +172,9 @@ def test_str():
     assert str(a & b) == "(a & b)"
     assert str(b | a) == "(a | b)"
     assert str(a ^ b) == "(a ^ b)"
-    assert str(c & (b | a)) == "((a | b) & c)"
-    assert str(c | (a & b)) == "((a & b) | c)"
-    assert str((a & b) ^ c) == "((a & b) ^ c)"
+    assert str((c | b) & a) == "(a & (b | c))"
+    assert str((a & b) | c) == "(c | (a & b))"
+    assert str((c & b) ^ a) == "(a ^ (b & c))"
 
 
 def test_to_int():
@@ -168,14 +187,26 @@ def test_tt():
     a = Bit("a")
     b = Bit("b")
     c = Bit("c")
+    zero = Bit(0)
 
-    assert a.tt() == TT([1], ["a"])
-    assert (~a).tt() == TT([0], ["a"])
-    assert (a & b).tt() == TT([3], ["a", "b"])
-    assert (~(a & b)).tt() == TT([0, 1, 2], ["a", "b"])
-    assert (a | b).tt() == TT([1, 2, 3], ["a", "b"])
-    assert (a ^ b).tt() == TT([1, 2], ["a", "b"])
-    assert ((Bit(1) ^ ~b) | (~b ^ ~c) | ~a | ~c).tt().prune() == TT([0], [])
+    assert a.to_tt() == TT([1], ["a"])
+    assert (~a).to_tt() == TT([0], ["a"])
+    assert (~a).to_tt() != zero.to_tt()
+    assert (a & b).to_tt() == TT([3], ["a", "b"])
+    assert (~(a & b)).to_tt() == TT([0, 1, 2], ["a", "b"])
+    assert (a | b).to_tt() == TT([1, 2, 3], ["a", "b"])
+    assert (a ^ b).to_tt() == TT([1, 2], ["a", "b"])
+    assert ((Bit(1) ^ ~b) | (~b ^ ~c) | ~a | ~c).to_tt().prune() == TT([0], [])
+
+    assert not a.to_tt().can_prune("a")
+    assert not a.to_tt().can_prune("b")
+    assert (a | (a & b)).to_tt().can_prune("b")
+
+
+def test_uint_reprs():
+    x = UInt("x", 2)
+    assert repr(x) == "UInt([Bit('x[0]'), Bit('x[1]')])"
+    assert str(x) == "x[1] x[0]"
 
 
 def test_uint_simple():
@@ -268,3 +299,33 @@ def test_uint_randomized():
         assert trunc(a | b) == int(uint_a | uint_b)
         assert trunc(a ^ b) == int(uint_a ^ uint_b)
         assert trunc(~a) == int(~uint_a)
+
+
+def test_matmul8x8():
+    COL = UInt(0x0101010101010101, 64)
+    ROW = UInt(0x00000000000000FF, 64)
+
+    a = UInt("a", 64)
+    b = UInt("b", 64)
+
+    res = (COL & a) * (ROW & b)
+    res ^= (COL & a >> 1) * (ROW & b >> 8)
+    res ^= (COL & a >> 2) * (ROW & b >> 16)
+    res ^= (COL & a >> 3) * (ROW & b >> 24)
+    res ^= (COL & a >> 4) * (ROW & b >> 32)
+    res ^= (COL & a >> 5) * (ROW & b >> 40)
+    res ^= (COL & a >> 6) * (ROW & b >> 48)
+    res ^= (COL & a >> 7) * (ROW & b >> 56)
+
+    res.print(8)
+
+    def idx(i: int, j: int):
+        return f"{(8 * i + j)}".zfill(2)
+
+    for i in range(8):
+        for j in range(8):
+            a_bits = [Bit(f"a[{idx(i,k)}]") for k in range(8)]
+            b_bits = [Bit(f"b[{idx(k,j)}]") for k in range(8)]
+            parts = [a & b for a, b in zip(a_bits, b_bits)]
+            sum = reduce(lambda x, y: x ^ y, parts)
+            assert res[i * 8 + j] == sum

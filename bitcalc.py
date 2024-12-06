@@ -6,41 +6,51 @@ class Expr:
     __match_args__ = ("x",)
     x: Union[int, str, "Expr", list["Expr"]]
 
-    def anf(self) -> "Expr":
-        """
-        Returns the algebraic normal form of the expression
-        """
-        return self.tt().to_anf()
-
     @property
     def name(self) -> str:
         """
-        The name of the expression
+        The type of the expression as a string
         """
         return type(self).__name__
 
-    def tt(self) -> "TT":
+    @property
+    def operator(self) -> str:
         """
-        Returns the truth table of the expression
+        The operator symbol of the expression
         """
         match self:
-            case Bit(0):
-                return TT.false()
-            case Bit(1):
-                return TT.true([])
-            case Bit(x):
-                return TT.bit(x)
+            case Bit(_):
+                return ""
+            case Not(_):
+                return "~"
+            case And(_):
+                return "&"
+            case Or(_):
+                return "|"
+            case Xor(_):
+                return "^"
+
+    def subst(self, var: str, expr: "Expr") -> "Expr":
+        """
+        Substitutes all occurrences of `var` in the expression with `expr`
+        """
+        match self:
+            case Bit(x) if x == var:
+                return expr
             case Not(x):
-                return ~(x.tt())
+                return Not(x.subst(var, expr))
             case And(x):
-                tts = [e.tt() for e in x]
-                return reduce(lambda a, b: a & b, tts)
+                return And([e.subst(var, expr) for e in x])
             case Or(x):
-                tts = [e.tt() for e in x]
-                return reduce(lambda a, b: a | b, tts)
+                return Or([e.subst(var, expr) for e in x])
             case Xor(x):
-                tts = [e.tt() for e in x]
-                return reduce(lambda a, b: a ^ b, tts)
+                return Xor([e.subst(var, expr) for e in x])
+
+    def to_anf(self) -> "Expr":
+        """
+        Returns the algebraic normal form of the expression
+        """
+        return self.to_tt().to_anf()
 
     def to_int(self) -> int | None:
         """
@@ -53,14 +63,35 @@ class Expr:
             case _:
                 return None
 
+    def to_tt(self) -> "TT":
+        """
+        Returns the truth table of the expression
+        """
+        match self:
+            case Bit(0):
+                return TT.false()
+            case Bit(1):
+                return TT.true([])
+            case Bit(x):
+                return TT.bit(x)
+            case Not(x):
+                return ~(x.to_tt())
+            case And(x):
+                tts = [e.to_tt() for e in x]
+                return reduce(lambda a, b: a & b, tts)
+            case Or(x):
+                tts = [e.to_tt() for e in x]
+                return reduce(lambda a, b: a | b, tts)
+            case Xor(x):
+                tts = [e.to_tt() for e in x]
+                return reduce(lambda a, b: a ^ b, tts)
+
     def vars(self) -> list[str]:
         """
         Returns the variables in the expression
         """
         match self:
-            case Bit(n) if n in (0, 1):
-                return []
-            case Bit(x):
+            case Bit(x) if x not in (0, 1):
                 return [x]
             case Not(x):
                 return x.vars()
@@ -76,7 +107,10 @@ class Expr:
         """
         Compares two expressions for equality
         """
-        return self.tt() == other.tt()
+        if str(self) == str(other):
+            return True
+        else:
+            return self.to_tt() == other.to_tt()
 
     def __and__(self, other: "Expr") -> "Expr":
         """
@@ -126,6 +160,18 @@ class Expr:
             case _:
                 return Not(self)
 
+    def __len__(self) -> int:
+        """
+        Returns the number of operands in the expression
+        """
+        match self:
+            case Bit(_):
+                return 1
+            case Not(x):
+                return len(x)
+            case And(x) | Or(x) | Xor(x):
+                return sum(len(e) for e in x)
+
     def __or__(self, other: "Expr") -> "Expr":
         """
         Returns the disjunction of two expressions
@@ -157,12 +203,12 @@ class Expr:
                 return f"{x}"
             case Not(x):
                 return f"~{x}"
-            case And(x):
-                return f"({' & '.join(sorted([str(a) for a in x]))})"
-            case Or(x):
-                return f"({' | '.join(sorted([str(a) for a in x]))})"
-            case Xor(x):
-                return f"({' ^ '.join(sorted([str(a) for a in x]))})"
+            case And(x) | Or(x) | Xor(x):
+                operands = sorted(
+                    [str(e) for e in x],
+                    key=lambda e: (len(e), str(e)),
+                )
+                return f"({f' {self.operator} '.join(operands)})"
 
     def __repr__(self) -> str:
         """
@@ -270,17 +316,18 @@ class TT:
         """
         return TT([1], [label])
 
-    def can_prune(self, var: str) -> bool:
+    def can_prune(self, v: str) -> bool:
         """
         Returns whether the variable is redundant and should be pruned. A variable is redundant
         if the result doesn't depend on it, or if it's not present in the expression.
         """
-        if next((v for v in self.vars if v == var), None):
-            x = 1 << self.vars.index(var)
-            ones = [r for r in self.rows if r & x]
-            # nonzero = [r for r in self.rows if r]
-            if all(r ^ x in self.rows for r in ones):
-                return True
+        if v in self.vars:
+            x = 1 << self.vars.index(v)
+            r00 = [r for r in self.rows if not r & x]
+            r11 = [r for r in self.rows if r & x]
+            r01 = [r | x for r in r00]
+            r10 = [r ^ x for r in r11]
+            return r00 == r10 and r01 == r11
         return False
 
     @classmethod
@@ -318,20 +365,22 @@ class TT:
         Converts the truth table to an algebraic normal form expression
         """
         tt = self.prune()
-        if tt.rows == []:
+        rows, vars = tt.rows, tt.vars
+        n = 2 ** len(vars)
+        if rows == []:
             return Bit(0)
+        elif len(rows) == n:
+            return Bit(1)
         else:
-            parts = []
-            if 0 in tt.rows:
-                parts.append(Bit(1))
-                tt = (~tt).prune()
-            for r in tt.rows:
-                bits = [Bit(v) for i, v in enumerate(tt.vars) if r & (1 << i)]
-                parts.append(reduce(lambda a, b: a & b, bits))
-                # if bits:
-                # else:
-                #     x = reduce(lambda a, b: a & b, [Bit(v) for v in vars])
-                #     parts.append(Bit(1) ^ x)
+            parts = [Bit(1)] if 0 in rows else []
+            for r in range(1, n):
+                anc = [row - 1 for row in rows if row > 0 and row - 1 not in rows]
+                suc = [row for row in rows if row < n - r and row + 1 not in rows]
+                rows = sorted(set(anc + suc))
+                if 0 in rows:
+                    bits = [Bit(v) for i, v in enumerate(vars) if r & (1 << i)]
+                    parts.append(reduce(lambda a, b: a & b, bits))
+
             anf = reduce(lambda a, b: a ^ b, parts)
             return anf
 
@@ -350,12 +399,6 @@ class TT:
         """
         self.rows = rows
         self.vars = vars
-
-    def __len__(self):
-        """
-        Returns the number of rows in the truth table
-        """
-        return len(self.table)
 
     def __eq__(self, other: "TT") -> bool:
         """
@@ -424,7 +467,7 @@ class TT:
 
 class UInt:
     __match_args__ = ("bits",)
-    bits: list[Bit]
+    bits: list[Expr]
 
     def __init__(self, bits, width=None):
         """
