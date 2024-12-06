@@ -129,8 +129,6 @@ class Expr:
                 return And(x + y)
             case (a, And(x)) | (And(x), a):
                 return And([a] + x)
-            case x, y if x == Not(y):
-                return Bit(0)
             case _:
                 return And([self, other])
 
@@ -185,8 +183,6 @@ class Expr:
                 return Bit(x)
             case (Bit(0), expr) | (expr, Bit(0)):
                 return expr
-            case x, y if x == Not(y):
-                return Bit(1)
             case (Or(x), Or(y)):
                 return Or(x + y)
             case (o, Or(x)) | (Or(x), o):
@@ -235,8 +231,6 @@ class Expr:
                 return expr
             case (Bit(x), Bit(y)) if x == y:
                 return Bit(0)
-            case x, y if x == Not(y):
-                return Bit(1)
             case (Xor(x), Xor(y)):
                 return Xor(x + y)
             case (e, Xor(x)) | (Xor(x), e):
