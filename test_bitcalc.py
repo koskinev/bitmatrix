@@ -73,23 +73,8 @@ def test_eq():
     # Misc.
     assert one ^ b ^ (a & b) != one
 
-def test_len():
-    a = Bit("a")
-    b = Bit("b")
-    c = Bit("c")
-    one = Bit(1)
 
-    assert a.to_anf() == a
-    assert (~a).to_anf() == one ^ a
-    assert (a | b).to_anf() == a ^ b ^ (a & b)
-    assert (~(a | b)).to_anf() == one ^ a ^ b ^ (a & b)
-    assert ((~a & ~c) | ~b | ~c).to_anf() == one ^ (b & c)
-    assert ((Bit(1) ^ ~b) | (~b ^ ~c) | ~a | ~c).to_anf() == one
-    assert ((a | b) & c).to_anf() == (a & c) ^ (b & c) ^ (a & b & c)
-    assert ((a | b) ^ (b | c)).to_anf() == a ^ c ^ (a & b) ^ (b & c)
-    assert ((a ^ c) | (c ^ ~b)).to_anf() == b ^ (a & b) ^ (a & c) ^ (b & c) ^ one
-
-def test_eq_randomized():
+def test_fuzz():
     from random import choices, randrange
 
     BITS = 3
@@ -98,7 +83,7 @@ def test_eq_randomized():
 
     exprs, equal = {}, 0
 
-    def rand_unit() -> Bit:
+    def rand_literal() -> Bit:
         x = chr(ord("a") + randrange(BITS))
         match randrange(2):
             case 0:
@@ -115,34 +100,70 @@ def test_eq_randomized():
             case 2:
                 return a ^ b
 
+    def rand_expr() -> "Expr":
+        expr = rand_literal()
+        while len(expr.vars()) < BITS:
+            a, b = rand_literal(), rand_literal()
+            rhs = rand_op(a, b)
+            expr = rand_op(expr, rhs)
+        return expr
+
     # Loop while the number of equal expressions found is less than MIN_EQUAL.
     while equal < MIN_EQUAL:
         # Generate a random expression.
-        expr = rand_unit()
-        while len(expr.vars()) < BITS:
-            a, b = rand_unit(), rand_unit()
-            rhs = rand_op(a, b)
-            expr = rand_op(expr, rhs)
+        expr = rand_expr()
 
-        tt = expr.to_tt().prune()
-        tt_rep = repr(tt)
+        # Convert the expression to ANF, CNF, DNF and verify that they are equal.
         anf = expr.to_anf()
+        cnf = expr.to_cnf()
+        dnf = expr.to_dnf()
 
-        # If the truth table is already present, verify that the expression's ANF is equal
-        # to the one stored.
-        if tt_rep in exprs:
-            assert str(anf) == str(exprs[tt_rep])
+        assert anf == expr
+        assert cnf == expr
+        assert dnf == expr
+        assert anf == cnf
+        assert anf == dnf
+        assert cnf == dnf
+
+        # Verify that the expressions are equal for all possible bit combinations.
+        tt, vars = 0, expr.vars()
+        for bits in range(1 << BITS):
+            e = expr.eval(bits, vars)
+            a = anf.eval(bits, vars)
+            c = cnf.eval(bits, vars)
+            d = dnf.eval(bits, vars)
+            assert e == a == d == c
+            tt = (tt << 1) | e
+
+        if tt in exprs:
+            assert expr == exprs[tt]
             equal += 1
         else:
-            exprs[tt_rep] = anf
+            exprs[tt] = expr
 
         # Assert that every anf with a different truth table is not equal to the current expression.
-        others = list(exprs.items())
+        others = [o for k, o in exprs.items() if k != tt]
         if len(others) > TEST_INEQUAL:
             others = choices(others, k=TEST_INEQUAL)
-        for ott_rep, oanf in others:
-            if ott_rep != tt_rep:
-                assert str(anf) != str(oanf)
+        for other in others:
+            assert expr != other
+
+
+def test_len():
+    a = Bit("a")
+    b = Bit("b")
+    c = Bit("c")
+    one = Bit(1)
+
+    assert a.to_anf() == a
+    assert (~a).to_anf() == one ^ a
+    assert (a | b).to_anf() == a ^ b ^ (a & b)
+    assert (~(a | b)).to_anf() == one ^ a ^ b ^ (a & b)
+    assert ((~a & ~c) | ~b | ~c).to_anf() == one ^ (b & c)
+    assert ((Bit(1) ^ ~b) | (~b ^ ~c) | ~a | ~c).to_anf() == one
+    assert ((a | b) & c).to_anf() == (a & c) ^ (b & c) ^ (a & b & c)
+    assert ((a | b) ^ (b | c)).to_anf() == a ^ c ^ (a & b) ^ (b & c)
+    assert ((a ^ c) | (c ^ ~b)).to_anf() == b ^ (a & b) ^ (a & c) ^ (b & c) ^ one
 
 
 def test_repr():

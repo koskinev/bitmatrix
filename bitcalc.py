@@ -1,3 +1,4 @@
+from copy import copy
 from functools import reduce
 from typing import Union
 
@@ -5,6 +6,25 @@ from typing import Union
 class Expr:
     __match_args__ = ("x",)
     x: Union[int, str, "Expr", list["Expr"]]
+
+    def eval(self, bits: int, vars: list[str]) -> int:
+        """
+        Evaluates the expression by assigning the `i`-th bit of `bits` to the variable `vars[i]`.
+        The result is a single bit integer.
+        """
+        match self:
+            case Bit(n) if n in (0, 1):
+                return n
+            case Bit(x):
+                return (bits >> vars.index(x)) & 1
+            case Not(e):
+                return 1 & ~e.eval(bits, vars)
+            case And(x):
+                return reduce(lambda a, b: a & b, (e.eval(bits, vars) for e in x))
+            case Or(x):
+                return reduce(lambda a, b: a | b, (e.eval(bits, vars) for e in x))
+            case Xor(x):
+                return reduce(lambda a, b: a ^ b, (e.eval(bits, vars) for e in x))
 
     @property
     def name(self) -> str:
@@ -48,15 +68,21 @@ class Expr:
 
     def to_anf(self) -> "Expr":
         """
-        Returns the algebraic normal form of the expression
+        Returns the expression in algebraic normal form, i.e. as a XOR of ANDs
         """
         return self.to_tt().to_anf()
 
     def to_cnf(self) -> "Expr":
         """
-        Returns the conjunctive normal form of the expression
+        Returns the expression in conjunctive normal form, i.e. as an AND of ORs
         """
         return self.to_tt().to_cnf()
+
+    def to_dnf(self) -> "Expr":
+        """
+        Returns the expression in disjunctive normal form, i.e. as an OR of ANDs
+        """
+        return self.to_tt().to_dnf()
 
     def to_int(self) -> int | None:
         """
@@ -348,8 +374,8 @@ class TT:
         elif len(self.rows) == 2 ** len(self.vars):
             return TT([0], [])
         else:
-            vars = self.vars.copy()
-            rows = self.rows.copy()
+            vars = copy(self.vars)
+            rows = copy(self.rows)
             extra = [v for v in vars if self.can_prune(v)]
             while extra:
                 mask = 2 ** len(vars) - 1
@@ -362,43 +388,73 @@ class TT:
 
     def to_anf(self) -> "Expr":
         """
-        Converts the truth table to an algebraic normal form expression
+        Converts the truth table to an algebraic normal form expression, i.e. a XOR of ANDs
         """
         tt = self.prune()
         rows, vars = tt.rows, list(enumerate(tt.vars))
         n = 2 ** len(vars)
-        if rows == []:
-            return Bit(0)
-        elif len(rows) == n:
-            return Bit(1)
-        else:
-            parts = [Bit(1)] if 0 in rows else []
-            for r in range(1, n):
-                anc = [row - 1 for row in rows if row > 0 and row - 1 not in rows]
-                suc = [row for row in rows if row < n - r and row + 1 not in rows]
-                rows = sorted(set(anc + suc))
-                if 0 in rows:
-                    bits = [Bit(v) for i, v in vars if r & (1 << i)]
+        match len(rows):
+            case 0:
+                return Bit(0)
+            case l if l == n:
+                return Bit(1)
+            case _:
+                coeff, parts, temp = [], [], []
+                for x in range(n):
+                    for row in rows:
+                        if row > 0 and row - 1 not in rows:
+                            temp.append(row - 1)
+                        if row < n - x and row + 1 not in rows:
+                            temp.append(row)
+                    if rows and rows[0] == 0:
+                        coeff.append(x)
+                    rows, temp = temp, []
+                for x in coeff:
+                    bits = [Bit(1)] + [Bit(v) for i, v in vars if x & (1 << i)]
                     parts.append(reduce(lambda a, b: a & b, bits))
-
-            anf = reduce(lambda a, b: a ^ b, parts)
-            return anf
+                anf = reduce(lambda a, b: a ^ b, parts)
+                return anf
 
     def to_cnf(self) -> "Expr":
         """
-        Converts the truth table to a conjunctive normal form expression
+        Converts the truth table to a conjunctive normal form expression, i.e. an AND of ORs
         """
         tt = self.prune()
         rows, vars = tt.rows, list(enumerate(tt.vars))
-        if not tt.rows:
-            return Bit(0)
-        else:
-            parts = []
-            for r in rows:
-                bits = [Bit(v) if r & (1 << i) else ~Bit(v) for i, v in vars]
-                parts.append(reduce(lambda a, b: a & b, bits))
-            cnf = reduce(lambda a, b: a | b, parts)
-            return cnf
+        n = 2 ** len(vars)
+        match len(rows):
+            case 0:
+                return Bit(0)
+            case l if l == n:
+                return Bit(1)
+            case _:
+                parts = []
+                for x in range(n):
+                    if x not in rows:
+                        bits = [~Bit(v) if x & (1 << i) else Bit(v) for i, v in vars]
+                        parts.append(reduce(lambda a, b: a | b, bits))
+                cnf = reduce(lambda a, b: a & b, parts)
+                return cnf
+
+    def to_dnf(self) -> "Expr":
+        """
+        Converts the truth table to a disjunctive normal form expression, i.e. an OR of ANDs
+        """
+        tt = self.prune()
+        rows, vars = tt.rows, list(enumerate(tt.vars))
+        n = 2 ** len(vars)
+        match len(rows):
+            case 0:
+                return Bit(0)
+            case l if l == n:
+                return Bit(1)
+            case _:
+                parts = []
+                for x in rows:
+                    bits = [Bit(v) if x & (1 << i) else ~Bit(v) for i, v in vars]
+                    parts.append(reduce(lambda a, b: a & b, bits))
+                dnf = reduce(lambda a, b: a | b, parts)
+                return dnf
 
     @classmethod
     def true(self, vars: list[str]) -> "TT":
@@ -467,8 +523,8 @@ class TT:
         """
         Inverts the truth table
         """
-        every = TT.true(self.vars)
-        rows = [r for r in every if r not in self.rows]
+        n = 2 ** len(self.vars)
+        rows = [r for r in range(n) if r not in self.rows]
         return TT(rows, self.vars)
 
     def __iter__(self):
@@ -530,7 +586,7 @@ class UInt:
         """
         self.assert_similar(other)
         zero = UInt.from_value(0, self.width())
-        a, b = self.copy(), other.copy()
+        a, b = copy(self), copy(other)
         sum = a ^ b
         carry = a & b
         while carry != zero:
@@ -552,7 +608,7 @@ class UInt:
         Unsigned, modular multiplication.
         """
         self.assert_similar(other)
-        a, b = self.copy(), other.copy()
+        a, b = copy(self), copy(other)
         zero = UInt.from_value(0, self.width())
         prod = zero
         while a != zero:
@@ -734,8 +790,9 @@ class UInt:
 
     def set_width(self, width):
         """
-        Sets the bit width to `width`. If `width` is less than the current width, the most significant bits will be removed.
-        If `width` is greater than the current width, the `UInt` will be zero-extended.
+        Sets the bit width to `width`. If `width` is less than the current width,
+        the most significant bits will be removed. If `width` is greater than the
+        current width, the `UInt` will be zero-extended.
         """
         if width < self.width():
             self.bits = self.bits[:width]
