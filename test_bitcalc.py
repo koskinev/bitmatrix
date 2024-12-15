@@ -1,8 +1,8 @@
-from bitcalc import TT, Expr, Bit, UInt
+from bitcalc import TT, Bit, Expr, Not, And, Or, Xor, UInt
 from functools import reduce
 
 
-def test_anf():
+def test_expr_anf():
     a = Bit("a")
     b = Bit("b")
     c = Bit("c")
@@ -19,7 +19,7 @@ def test_anf():
     assert ((a ^ c) | (c ^ ~b)).to_anf() == b ^ (a & b) ^ (a & c) ^ (b & c) ^ one
 
 
-def test_eq():
+def test_expr_eq():
     a = Bit("a")
     b = Bit("b")
     c = Bit("c")
@@ -72,9 +72,10 @@ def test_eq():
 
     # Misc.
     assert one ^ b ^ (a & b) != one
+    assert (b | (c ^ (~b & ~c))) != ~c
 
 
-def test_fuzz():
+def test_expr_fuzz():
     from random import choices, randrange
 
     BITS = 3
@@ -83,13 +84,15 @@ def test_fuzz():
 
     exprs, equal = {}, 0
 
-    def rand_literal() -> Bit:
+    def rand_literal() -> Expr:
         x = chr(ord("a") + randrange(BITS))
         match randrange(2):
             case 0:
                 return Bit(x)
             case 1:
                 return ~Bit(x)
+            case _:
+                raise ValueError("Invalid random value")
 
     def rand_op(a: Expr, b: Expr) -> "Expr":
         match randrange(3):
@@ -99,13 +102,15 @@ def test_fuzz():
                 return a | b
             case 2:
                 return a ^ b
+            case _:
+                raise ValueError("Invalid random value")
 
     def rand_expr() -> "Expr":
-        expr = rand_literal()
+        expr = Expr.empty()
         while len(expr.vars()) < BITS:
-            a, b = rand_literal(), rand_literal()
-            rhs = rand_op(a, b)
-            expr = rand_op(expr, rhs)
+            lit = rand_literal()
+            expr = rand_op(expr, lit)
+            print(repr(expr))
         return expr
 
     # Loop while the number of equal expressions found is less than MIN_EQUAL.
@@ -113,11 +118,15 @@ def test_fuzz():
         # Generate a random expression.
         expr = rand_expr()
 
+        # Simplify
+        simp = expr.simplify()
+
         # Convert the expression to ANF, CNF, DNF and verify that they are equal.
         anf = expr.to_anf()
         cnf = expr.to_cnf()
         dnf = expr.to_dnf()
 
+        assert simp == expr
         assert anf == expr
         assert cnf == expr
         assert dnf == expr
@@ -126,14 +135,15 @@ def test_fuzz():
         assert cnf == dnf
 
         # Verify that the expressions are equal for all possible bit combinations.
-        tt, vars = 0, expr.vars()
+        tt, vars = 0, [chr(ord("a") + i) for i in range(BITS)]
         for bits in range(1 << BITS):
             e = expr.eval(bits, vars)
             a = anf.eval(bits, vars)
             c = cnf.eval(bits, vars)
             d = dnf.eval(bits, vars)
+            assert e in (0, 1)
             assert e == a == d == c
-            tt = (tt << 1) | e
+            tt |= e << bits
 
         if tt in exprs:
             assert expr == exprs[tt]
@@ -149,24 +159,46 @@ def test_fuzz():
             assert expr != other
 
 
-def test_len():
+def test_expr_init():
     a = Bit("a")
     b = Bit("b")
-    c = Bit("c")
     one = Bit(1)
+    zero = Bit(0)
 
-    assert a.to_anf() == a
-    assert (~a).to_anf() == one ^ a
-    assert (a | b).to_anf() == a ^ b ^ (a & b)
-    assert (~(a | b)).to_anf() == one ^ a ^ b ^ (a & b)
-    assert ((~a & ~c) | ~b | ~c).to_anf() == one ^ (b & c)
-    assert ((Bit(1) ^ ~b) | (~b ^ ~c) | ~a | ~c).to_anf() == one
-    assert ((a | b) & c).to_anf() == (a & c) ^ (b & c) ^ (a & b & c)
-    assert ((a | b) ^ (b | c)).to_anf() == a ^ c ^ (a & b) ^ (b & c)
-    assert ((a ^ c) | (c ^ ~b)).to_anf() == b ^ (a & b) ^ (a & c) ^ (b & c) ^ one
+    not_one = Not(one)
+    assert type(not_one) is Bit
+    assert str(not_one) == "0"
+
+    and_a1 = And([a, one])
+    assert type(and_a1) is Bit
+    assert str(and_a1) == "a"
+
+    and_ab0 = And([a, b, zero])
+    assert type(and_ab0) is Bit
+    assert str(and_ab0) == "0"
+
+    or_ab1 = Or([a, b, one])
+    assert type(or_ab1) is Bit
+    assert str(or_ab1) == "1"
+
+    or_ab0 = Or([a, b, zero])
+    assert type(or_ab0) is Or
+    assert str(or_ab0) == "(a | b)"
+
+    xor_ab01 = Xor([a, b, zero, one])
+    assert type(xor_ab01) is Xor
+    assert str(xor_ab01) == "(1 ^ a ^ b)"
+
+    xor_ab00 = Xor([a, b, zero, zero])
+    assert type(xor_ab00) is Xor
+    assert str(xor_ab00) == "(a ^ b)"
+
+    xor_ab001 = Xor([a, b, zero, zero, one])
+    assert type(xor_ab001) is Xor
+    assert str(xor_ab001) == "(1 ^ a ^ b)"
 
 
-def test_repr():
+def test_expr_repr():
     a = Bit("a")
     b = Bit("b")
     c = Bit("c")
@@ -181,7 +213,21 @@ def test_repr():
     assert repr((a ^ b) & c) == "And(Xor(Bit('a'), Bit('b')), Bit('c'))"
 
 
-def test_str():
+def test_expr_simplify():
+    a = Bit("a")
+    b = Bit("b")
+    c = Bit("c")
+
+    def check(expr: Expr):
+        simp = expr.simplify()
+        assert simp == expr
+        assert len(str(simp)) < len(str(expr))
+
+    check((~b ^ (b & c & ~b & (b ^ b ^ ~c))))
+    check((a ^ a ^ b ^ b ^ b ^ c ^ ~a ^ ~a))
+
+
+def test_expr_str():
     a = Bit("a")
     b = Bit("b")
     c = Bit("c")
@@ -196,13 +242,13 @@ def test_str():
     assert str((c & b) ^ a) == "(a ^ (b & c))"
 
 
-def test_to_int():
+def test_expr_to_int():
     assert Bit(0).to_int() == 0
     assert Bit(1).to_int() == 1
     assert Bit("a").to_int() is None
 
 
-def test_tt():
+def test_expr_tt():
     a = Bit("a")
     b = Bit("b")
     c = Bit("c")
@@ -216,10 +262,6 @@ def test_tt():
     assert (a | b).to_tt() == TT([1, 2, 3], ["a", "b"])
     assert (a ^ b).to_tt() == TT([1, 2], ["a", "b"])
     assert ((Bit(1) ^ ~b) | (~b ^ ~c) | ~a | ~c).to_tt().prune() == TT([0], [])
-
-    assert not a.to_tt().can_prune("a")
-    assert not a.to_tt().can_prune("b")
-    assert (a | (a & b)).to_tt().can_prune("b")
 
 
 def test_uint_reprs():
@@ -273,7 +315,7 @@ def test_uint_simple():
         x.assert_similar(one)  # UInts with different widths are not similar
 
 
-def test_uint_randomized():
+def test_uint_fuzz():
     from random import randrange
 
     COUNT = 1000
@@ -320,7 +362,7 @@ def test_uint_randomized():
         assert trunc(~a) == int(~uint_a)
 
 
-def test_matmul8x8():
+def test_uint_matmul8x8():
     COL = UInt(0x0101010101010101, 64)
     ROW = UInt(0x00000000000000FF, 64)
 
@@ -336,7 +378,7 @@ def test_matmul8x8():
     res ^= (COL & a >> 6) * (ROW & b >> 48)
     res ^= (COL & a >> 7) * (ROW & b >> 56)
 
-    res.print(8)
+    print8x8(res)
 
     def idx(i: int, j: int):
         return f"{(8 * i + j)}".zfill(2)
@@ -348,3 +390,41 @@ def test_matmul8x8():
             parts = [a & b for a, b in zip(a_bits, b_bits)]
             sum = reduce(lambda x, y: x ^ y, parts)
             assert res[i * 8 + j] == sum
+
+
+def test_uint_transpose8x8():
+    labels = [[f"{chr(ord("a") + j)}{i}" for i in reversed(range(8))] for j in range(8)]
+    rows = [UInt([Bit(label) for label in row]) for row in labels]
+
+    def delta_swap(x: "UInt", mask: "UInt", shift: int) -> "UInt":
+        t = ((x >> shift) ^ x) & mask
+        res = (x ^ t) ^ (t << shift)
+        for i, bit in enumerate(res):
+            res[i] = bit.to_anf()
+        return res
+
+    mask0 = UInt(0x00AA00AA00AA00AA, 64)
+    mask1 = UInt(0x0000CCCC0000CCCC, 64)
+    mask2 = UInt(0x00000000F0F0F0F0, 64)
+
+    m = reduce(lambda x, y: x.concat(y), rows)
+    print8x8(m)
+    t = delta_swap(m, mask0, 7)
+    print8x8(t)
+    t = delta_swap(t, mask1, 14)
+    print8x8(t)
+    t = delta_swap(t, mask2, 28)
+    print8x8(t)
+
+    for i in range(8):
+        for j in range(8):
+            assert m[i * 8 + j] == t[j * 8 + i]
+
+
+def print8x8(matrix: UInt):
+    print()
+    for i in range(8):
+        s = i * 8
+        e = s + 8
+        bits = matrix[s:e]
+        print(" ".join([str(bit) for bit in bits]))

@@ -1,11 +1,15 @@
 from copy import copy
 from functools import reduce
-from typing import Union
+from typing import Any, Iterator, NoReturn, Sequence, Union
 
 
 class Expr:
     __match_args__ = ("x",)
-    x: Union[int, str, "Expr", list["Expr"]]
+    x: Any
+
+    @staticmethod
+    def empty() -> "Empty":
+        return Empty(None)
 
     def eval(self, bits: int, vars: list[str]) -> int:
         """
@@ -15,7 +19,7 @@ class Expr:
         match self:
             case Bit(n) if n in (0, 1):
                 return n
-            case Bit(x):
+            case Bit(x) if type(x) is str:
                 return (bits >> vars.index(x)) & 1
             case Not(e):
                 return 1 & ~e.eval(bits, vars)
@@ -25,16 +29,72 @@ class Expr:
                 return reduce(lambda a, b: a | b, (e.eval(bits, vars) for e in x))
             case Xor(x):
                 return reduce(lambda a, b: a ^ b, (e.eval(bits, vars) for e in x))
+            case Empty(_):
+                raise ValueError("Cannot evaluate an empty expression.")
+            case _:
+                unreachable()
+
+    def simplify(self) -> "Expr":
+        match self:
+            case Bit(_):
+                return self
+            case Not(Not(x)):
+                return x.simplify()
+            case Not(x):
+                return Not(x.simplify())
+            case And(_):
+                x, s = [], [e.simplify() for e in self.x]
+                for e in s:
+                    if Not(e) in x:
+                        return Bit(0)
+                    else:
+                        x.append(e)
+                return And(x)
+            case Or(_):
+                x, s = [], [e.simplify() for e in self.x]
+                for e in s:
+                    if Not(e) in x:
+                        return Bit(1)
+                    else:
+                        x.append(e)
+                return Or(x)
+            case Xor(_):
+                bits, x, s = [], [], [e.simplify() for e in self.x]
+                for e in s:
+                    if e in x:
+                        x.remove(e)
+                        bits.append(0)
+                    elif Not(e) in x:
+                        x.remove(Not(e))
+                        bits.append(1)
+                    else:
+                        x.append(e)
+                if bits and reduce(lambda a, b: a ^ b, bits):
+                    x.append(Bit(1))
+                return Xor(x)
+            case _:
+                return self
+
+    def substitute(self, var: str, expr: "Expr") -> "Expr":
+        """
+        Substitutes all occurrences of `var` in the expression with `expr`
+        """
+        match self:
+            case Bit(x) if x == var:
+                return expr
+            case Not(x):
+                return Not(x.substitute(var, expr))
+            case And(x):
+                return And([e.substitute(var, expr) for e in x])
+            case Or(x):
+                return Or([e.substitute(var, expr) for e in x])
+            case Xor(x):
+                return Xor([e.substitute(var, expr) for e in x])
+            case _:
+                return self
 
     @property
-    def name(self) -> str:
-        """
-        The type of the expression as a string
-        """
-        return type(self).__name__
-
-    @property
-    def operator(self) -> str:
+    def symbol(self) -> str:
         """
         The operator symbol of the expression
         """
@@ -49,22 +109,8 @@ class Expr:
                 return "|"
             case Xor(_):
                 return "^"
-
-    def subst(self, var: str, expr: "Expr") -> "Expr":
-        """
-        Substitutes all occurrences of `var` in the expression with `expr`
-        """
-        match self:
-            case Bit(x) if x == var:
-                return expr
-            case Not(x):
-                return Not(x.subst(var, expr))
-            case And(x):
-                return And([e.subst(var, expr) for e in x])
-            case Or(x):
-                return Or([e.subst(var, expr) for e in x])
-            case Xor(x):
-                return Xor([e.subst(var, expr) for e in x])
+            case _:
+                return "()"
 
     def to_anf(self) -> "Expr":
         """
@@ -104,7 +150,7 @@ class Expr:
                 return TT.false()
             case Bit(1):
                 return TT.true([])
-            case Bit(x):
+            case Bit(x) if type(x) is str:
                 return TT.bit(x)
             case Not(x):
                 return ~(x.to_tt())
@@ -117,13 +163,15 @@ class Expr:
             case Xor(x):
                 tts = [e.to_tt() for e in x]
                 return reduce(lambda a, b: a ^ b, tts)
+            case _:
+                raise ValueError("Cannot convert an empty expression to a truth table.")
 
     def vars(self) -> list[str]:
         """
         Returns the variables in the expression
         """
         match self:
-            case Bit(x) if x not in (0, 1):
+            case Bit(x) if type(x) is str:
                 return [x]
             case Not(x):
                 return x.vars()
@@ -135,14 +183,21 @@ class Expr:
             case _:
                 return []
 
-    def __eq__(self, other: "Expr") -> bool:
+    def __eq__(self, other: object) -> bool:
         """
         Compares two expressions for equality
         """
-        if str(self) == str(other):
-            return True
-        else:
-            return self.to_tt() == other.to_tt()
+        match self, other:
+            case Bit(x), Bit(y):
+                return x == y
+            case (Empty(_), Expr()) | (Expr(), Empty(_)):
+                return False
+            case Expr(), Expr() if str(self) == str(other):
+                return True
+            case Expr(), Expr():
+                return self.to_tt() == other.to_tt()
+            case _:
+                return False
 
     def __and__(self, other: "Expr") -> "Expr":
         """
@@ -153,7 +208,7 @@ class Expr:
                 return Bit(n & m)
             case (Bit(0), _) | (_, Bit(0)):
                 return Bit(0)
-            case (Bit(1), expr) | (expr, Bit(1)):
+            case (Bit(1), expr) | (expr, Bit(1)) | (Empty(_), expr) | (expr, Empty(_)):
                 return expr
             case (Bit(x), Bit(y)) if x == y:
                 return Bit(x)
@@ -164,18 +219,10 @@ class Expr:
             case _:
                 return And([self, other])
 
-    def __init__(self, x):
+    def __init__(self, x: Union[int, str, "Expr", list["Expr"], None]):
         """
         Constructs an expression from a value or a list of expressions
         """
-        if type(self) is Bit:
-            assert x in (0, 1) or type(x) is str, f"Invalid bit value: {x}"
-        elif type(self) is Not:
-            assert isinstance(x, Expr), f"Invalid expression: {x}"
-        elif type(self) in (And, Or, Xor):
-            assert type(x) is list and all(
-                isinstance(e, Expr) for e in x
-            ), f"Invalid expression list: {x}"
         self.x = x
 
     def __invert__(self) -> "Expr":
@@ -187,20 +234,37 @@ class Expr:
                 return Bit(~n & 1)
             case Not(expr):
                 return expr
+            case Empty(_):
+                return self
             case _:
                 return Not(self)
+
+    def __iter__(self) -> Iterator["Expr"]:
+        """
+        Returns an iterator over the operands. For unary expressions, returns an empty
+        iterator.
+        """
+        match self:
+            case And(x) | Or(x) | Xor(x):
+                return iter(x)
+            case _:
+                return iter([])
 
     def __len__(self) -> int:
         """
         Returns the number of operands in the expression
         """
         match self:
+            case Empty(_):
+                return 0
             case Bit(_):
                 return 1
             case Not(x):
                 return len(x)
             case And(x) | Or(x) | Xor(x):
                 return sum(len(e) for e in x)
+            case _:
+                raise RuntimeError("Reached code that should be unreachable.")
 
     def __or__(self, other: "Expr") -> "Expr":
         """
@@ -213,7 +277,7 @@ class Expr:
                 return Bit(1)
             case (Bit(x), Bit(y)) if x == y:
                 return Bit(x)
-            case (Bit(0), expr) | (expr, Bit(0)):
+            case (Bit(0), expr) | (expr, Bit(0)) | (Empty(_), expr) | (expr, Empty(_)):
                 return expr
             case (Or(x), Or(y)):
                 return Or(x + y)
@@ -231,12 +295,16 @@ class Expr:
                 return f"{x}"
             case Not(x):
                 return f"~{x}"
+            case Empty():
+                return "()"
             case And(x) | Or(x) | Xor(x):
                 operands = sorted(
                     [str(e) for e in x],
                     key=lambda e: (len(e), str(e)),
                 )
-                return f"({f' {self.operator} '.join(operands)})"
+                return f"({f' {self.symbol} '.join(operands)})"
+            case _:
+                raise RuntimeError("Reached code that should be unreachable.")
 
     def __repr__(self) -> str:
         """
@@ -250,7 +318,11 @@ class Expr:
             case Not(x):
                 return f"Not({repr(x)})"
             case And(x) | Or(x) | Xor(x):
-                return f"{self.name}({', '.join(repr(a) for a in x)})"
+                return f"{type(self).__name__}({', '.join(repr(a) for a in x)})"
+            case Empty(_):
+                return "Empty"
+            case _:
+                raise RuntimeError("Reached code that should be unreachable.")
 
     def __xor__(self, other: "Expr") -> "Expr":
         """
@@ -259,7 +331,7 @@ class Expr:
         match self, other:
             case Bit(n), Bit(m) if n in (0, 1) and m in (0, 1):
                 return Bit(n ^ m)
-            case (Bit(0), expr) | (expr, Bit(0)):
+            case (Bit(0), expr) | (expr, Bit(0)) | (Empty(_), expr) | (expr, Empty(_)):
                 return expr
             case (Bit(x), Bit(y)) if x == y:
                 return Bit(0)
@@ -278,13 +350,32 @@ class Bit(Expr):
 
     x: int | str
 
+    @staticmethod
+    def __new__(cls, x: Union[str, int]) -> "Bit":
+        assert (
+            type(x) is str or type(x) is int and x in (0, 1)
+        ), f"Invalid argument. Cannot construct a Bit from {x}"
+        return super(Expr, Bit).__new__(Bit)
+
 
 class Not(Expr):
     """
     A negated expression
     """
 
-    x: "Expr"
+    x: Expr
+
+    @staticmethod
+    def __new__(cls, x: Expr) -> "Expr":
+        assert isinstance(
+            x, Expr
+        ), f"Invalid argument. Cannot construct a Not expression from {x}"
+        if isinstance(x, Bit) and type(x.x) is int:
+            return Bit(~x.x & 1)
+        elif isinstance(x, Not):
+            return x.x
+        else:
+            return super(Expr, Not).__new__(Not)
 
 
 class And(Expr):
@@ -294,6 +385,22 @@ class And(Expr):
 
     x: list[Expr]
 
+    @staticmethod
+    def __new__(cls, x: list[Expr]) -> "Expr":
+        assert type(x) is list and all(
+            isinstance(e, Expr) for e in x
+        ), f"Invalid argument. Cannot construct an And expression from {x}"
+        while len(x) > 1 and Bit(1) in x:
+            x.remove(Bit(1))
+        if len(x) == 0:
+            return Empty(None)
+        elif len(x) == 1:
+            return x[0]
+        elif Bit(0) in x:
+            return Bit(0)
+        else:
+            return super(Expr, And).__new__(And)
+
 
 class Or(Expr):
     """
@@ -302,6 +409,22 @@ class Or(Expr):
 
     x: list[Expr]
 
+    @staticmethod
+    def __new__(cls, x: list[Expr]) -> "Expr":
+        assert type(x) is list and all(
+            isinstance(e, Expr) for e in x
+        ), f"Invalid argument. Cannot construct an And expression from {x}"
+        while len(x) > 1 and Bit(0) in x:
+            x.remove(Bit(0))
+        if len(x) == 0:
+            return Empty(None)
+        elif len(x) == 1:
+            return x[0]
+        elif Bit(1) in x:
+            return Bit(1)
+        else:
+            return super(Expr, Or).__new__(Or)
+
 
 class Xor(Expr):
     """
@@ -309,6 +432,36 @@ class Xor(Expr):
     """
 
     x: list[Expr]
+
+    @staticmethod
+    def __new__(cls, x: list[Expr]) -> "Expr":
+        assert type(x) is list and all(
+            isinstance(e, Expr) for e in x
+        ), f"Invalid argument. Cannot construct an And expression from {x}"
+        index, bits = 0, []
+        while index < len(x):
+            if isinstance(x[index], Bit) and x[index].x in (0, 1):
+                bits.append(x.pop(index).x)
+            else:
+                index += 1
+        if bits and reduce(lambda a, b: a ^ b, bits):
+            x.append(Bit(1))
+        if len(x) == 0:
+            return Empty(None)
+        elif len(x) == 1:
+            return x[0]
+        else:
+            return super(Expr, Xor).__new__(Xor)
+
+
+class Empty(Expr):
+    """
+    An empty expression
+    """
+
+    @staticmethod
+    def __new__(cls, x: None) -> "Empty":
+        return super(Expr, Empty).__new__(Empty)
 
 
 class TT:
@@ -336,7 +489,7 @@ class TT:
         return TT(sorted(rows), vars)
 
     @classmethod
-    def bit(self, label: str) -> "TT":
+    def bit(cls, label: str) -> "TT":
         """
         Returns a truth table with a single bit variable
         """
@@ -350,14 +503,15 @@ class TT:
         if v in self.vars:
             x = 1 << self.vars.index(v)
             r00 = [r for r in self.rows if not r & x]
-            r11 = [r for r in self.rows if r & x]
-            r01 = [r | x for r in r00]
-            r10 = [r ^ x for r in r11]
-            return r00 == r10 and r01 == r11
+            if len(r00) == len(self.rows) // 2:
+                r11 = [r for r in self.rows if r & x]
+                r01 = [r | x for r in r00]
+                r10 = [r ^ x for r in r11]
+                return r00 == r10 and r01 == r11
         return False
 
     @classmethod
-    def false(self) -> "TT":
+    def false(cls) -> "TT":
         """
         Returns an empty truth table
         """
@@ -457,7 +611,7 @@ class TT:
                 return dnf
 
     @classmethod
-    def true(self, vars: list[str]) -> "TT":
+    def true(cls, vars: list[str]) -> "TT":
         """
         Returns a truth table with all rows set to 1
         """
@@ -472,21 +626,15 @@ class TT:
         self.rows = rows
         self.vars = vars
 
-    def __eq__(self, other: "TT") -> bool:
+    def __eq__(self, other: object) -> bool:
         """
         Compares two truth tables for equality
         """
-        if self.vars != other.vars:
-            self_ok = all(o in self.vars or other.can_prune(o) for o in other.vars)
-            other_ok = all(s in other.vars or self.can_prune(s) for s in self.vars)
-            if self_ok and other_ok:
-                a = self.prune()
-                b = other.prune()
-                return a.rows == b.rows
-            else:
-                return False
+        if type(other) is not TT:
+            return False
         else:
-            return self.rows == other.rows
+            a, b = self.prune(), other.prune()
+            return a.vars == b.vars and a.rows == b.rows
 
     def __and__(self, other: "TT") -> "TT":
         """
@@ -554,6 +702,9 @@ class UInt:
         if type(bits) is int:
             this = UInt.from_value(bits, width)
         elif type(bits) is str:
+            assert (
+                width is not None
+            ), "Width must be provided when constructing from a label."
             this = UInt.from_label(bits, width)
         else:
             this = UInt.from_exprs(list(reversed(bits)))
@@ -564,15 +715,17 @@ class UInt:
         this.bits = []
         return this
 
-    def __getitem__(self, index) -> Union[Bit, list[Bit]]:
+    def __getitem__(self, index: int | slice) -> Union[Expr, "UInt"]:
         """
         Depending on the type of the index, returns either a single bit or a UInt containing the bits at the given index.
         """
-        bits = self.bits[index]
         if type(index) is slice:
-            return UInt.from_exprs(bits)
-        else:
+            return UInt.from_exprs(self.bits[index])
+        elif type(index) is int:
+            bits = self.bits[index]
             return bits
+        else:
+            raise ValueError(f"Invalid index: {index}")
 
     def __setitem__(self, index, value):
         """
@@ -600,7 +753,8 @@ class UInt:
         Unsigned, modular subtraction.
         """
         self.assert_similar(other)
-        negated = ~other + UInt.from_exprs([Bit(1)] + [Bit(0)] * (self.width() - 1))
+        x = [Bit(1)] + [Bit(0)] * (self.width() - 1)
+        negated = ~other + UInt.from_exprs(x)
         return self + negated
 
     def __mul__(self, other) -> "UInt":
@@ -612,7 +766,7 @@ class UInt:
         zero = UInt.from_value(0, self.width())
         prod = zero
         while a != zero:
-            prod += UInt.from_exprs([(Bit(1) & a[0])] * self.width()) & b
+            prod += UInt.from_exprs([(Bit(1) & a.bits[0])] * self.width()) & b
             a >>= 1
             b <<= 1
         return prod
@@ -712,7 +866,7 @@ class UInt:
         return UInt.from_exprs(self.bits + other.bits)
 
     @classmethod
-    def from_exprs(cls, exprs: list[Expr]) -> "UInt":
+    def from_exprs(cls, exprs: Sequence[Expr]) -> "UInt":
         """
         Constructs a UInt from the list of expressions, interpreting each expression as a bit. Note that the first
         expression in the list will become the most significant bit.
@@ -722,11 +876,11 @@ class UInt:
         if not all(isinstance(expr, Expr) for expr in exprs):
             raise ValueError(f"Expected a list of expressions, got {exprs}.")
         uint = cls.__new__(cls)
-        uint.bits = exprs
+        uint.bits = list(exprs)
         return uint
 
     @classmethod
-    def from_value(cls, value: int, width: int = None) -> "UInt":
+    def from_value(cls, value: int, width: int | None = None) -> "UInt":
         """
         Constructs a UInt from an integer value and optional bit width. If the width is not provided, the UInt
         will have the minimum width required to represent the value. Raises a ValueError if the value is not an
@@ -756,15 +910,6 @@ class UInt:
         zwidth = len(str(width - 1))
         uint.bits = [Bit(f"{label}[{str(i).zfill(zwidth)}]") for i in range(width)]
         return uint
-
-    def print(self, bits_per_line):
-        """
-        Prints the value in chunks of `bits_per_line` bits
-        """
-        for i in range(0, len(self.bits), bits_per_line):
-            print(
-                " ".join(str(bit) for bit in reversed(self.bits[i : i + bits_per_line]))
-            )
 
     def reverse_bits(self) -> "UInt":
         """
@@ -805,3 +950,10 @@ class UInt:
         Returns the value's bit width
         """
         return len(self.bits)
+
+
+def unreachable() -> NoReturn:
+    """
+    Raises a RuntimeError with a message indicating that the code should be unreachable.
+    """
+    raise RuntimeError("Reached code that should be unreachable.")
