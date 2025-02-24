@@ -1,10 +1,10 @@
 use super::*;
-use crate::wyrand::{Random, WyRng};
+use crate::rng::{Random, Rng};
 
 #[test]
 fn matmul_8x8() {
     const ITERS: usize = 1000;
-    let mut rng: WyRng = Default::default();
+    let rng: Rng = Default::default();
     type Mat = [u8; 8];
 
     let identity = Mat::IDENTITY;
@@ -34,7 +34,7 @@ fn matmul_8x8() {
 #[test]
 fn matmul_16x16() {
     const ITERS: usize = 1000;
-    let mut rng: WyRng = Default::default();
+    let rng: Rng = Default::default();
     type Mat = [u16; 16];
 
     let identity = Mat::IDENTITY;
@@ -64,7 +64,7 @@ fn matmul_16x16() {
 #[test]
 fn matmul_32x32() {
     const ITERS: usize = 1000;
-    let mut rng: WyRng = Default::default();
+    let rng: Rng = Default::default();
     type Mat = [u32; 32];
 
     let identity = Mat::IDENTITY;
@@ -94,7 +94,7 @@ fn matmul_32x32() {
 #[test]
 fn matmul_64x64() {
     const ITERS: usize = 1000;
-    let mut rng: WyRng = Default::default();
+    let rng: Rng = Default::default();
     type Mat = [u64; 64];
 
     let identity = Mat::IDENTITY;
@@ -131,10 +131,10 @@ fn matmul_perf() {
     fn run<U, const N: usize>(count: usize)
     where
         [U; N]: BitMatrix,
-        U: Random<WyRng> + Copy,
+        U: Copy + Random<Rng>,
     {
         // Generate test matrices.
-        let mut rng: WyRng = Default::default();
+        let rng: Rng = Default::default();
         let mut data: Vec<([U; N], [U; N], [U; N])> = (0..count)
             .map(|_| (rng.random(), rng.random(), <[U; N]>::IDENTITY))
             .collect();
@@ -147,8 +147,8 @@ fn matmul_perf() {
         let duration = start.elapsed();
 
         println!(
-            "Multiply {N}x{N}: {duration:?} ({count} ops, {tput:.6} ns/op)",
-            tput = duration.as_nanos() as f64 / count as f64
+            "Multiply {N}x{N}: {duration:?} ({count} ops, {tput:.6} ns / bit)",
+            tput = duration.as_nanos() as f64 / (count * N * N) as f64
         );
     }
 
@@ -189,7 +189,7 @@ fn transpose_8x8() {
     );
 
     const ITERS: usize = 1000;
-    let mut rng: WyRng = Default::default();
+    let rng: Rng = Default::default();
     type Mat = [u8; 8];
 
     for _i in 0..ITERS {
@@ -251,7 +251,7 @@ fn transpose_16x16() {
     );
 
     const ITERS: usize = 1000;
-    let mut rng: WyRng = Default::default();
+    let rng: Rng = Default::default();
     type Mat = [u16; 16];
 
     for _i in 0..ITERS {
@@ -268,8 +268,25 @@ fn transpose_16x16() {
 #[test]
 fn transpose_32x32() {
     const ITERS: usize = 1000;
-    let mut rng: WyRng = Default::default();
+    let rng: Rng = Default::default();
     type Mat = [u32; 32];
+
+    for _i in 0..ITERS {
+        let matrix: Mat = rng.random();
+        let transpose = matrix.transposed();
+        for i in 0..Mat::SIZE {
+            for j in 0..Mat::SIZE {
+                assert_eq!(matrix.get(i, j), transpose.get(j, i));
+            }
+        }
+    }
+}
+
+#[test]
+fn transpose_64x64() {
+    const ITERS: usize = 1000;
+    let rng: Rng = Default::default();
+    type Mat = [u64; 64];
 
     for _i in 0..ITERS {
         let matrix: Mat = rng.random();
@@ -292,10 +309,10 @@ fn transpose_perf() {
     fn run<U, const N: usize>(count: usize)
     where
         [U; N]: BitMatrix,
-        U: Random<WyRng> + Copy,
+        U: Copy + Random<Rng>,
     {
         // Generate test matrices.
-        let mut rng: WyRng = Default::default();
+        let rng: Rng = Default::default();
         let original: Vec<[U; N]> = (0..count).map(|_| rng.random()).collect();
 
         // Create a mutable copy of the original matrices.
@@ -310,14 +327,14 @@ fn transpose_perf() {
 
         // Sample one element from each matrix and check if it was transposed correctly.
         for (matrix, transpose) in original.iter().zip(matrices.iter()) {
-            let i = rng.bounded(0, N);
-            let j = rng.bounded(0, N);
+            let i = rng.bounded(0..N);
+            let j = rng.bounded(0..N);
             assert_eq!(matrix.get(i, j), transpose.get(j, i));
         }
 
         println!(
-            "Transpose {N}x{N}: {duration:?} ({count} ops, {tput:.6} ns/op)",
-            tput = duration.as_nanos() as f64 / count as f64
+            "Transpose {N}x{N}: {duration:?} ({count} ops, {tput:.6} ns / bit)",
+            tput = duration.as_nanos() as f64 / (N * N * count) as f64
         );
     }
 
