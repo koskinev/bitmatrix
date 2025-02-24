@@ -920,7 +920,7 @@ impl BitMatrix for [u32; 32] {
     }
 
     fn transpose(&mut self) {
-        // Read the matrix into 8 128-bit integers, each containing four rows of the matrix.
+        // Read the matrix into 16 64-bit integers, each containing two rows of the matrix.
         let ptr: *mut [u64; 16] = self.as_mut_ptr().cast();
         let mut res = unsafe { ptr.read_unaligned() };
 
@@ -1034,18 +1034,30 @@ impl BitMatrix for [u64; 64] {
 
     fn matmul(self, rhs: Self) -> Self {
         // The commented code below is an implementation of the Strassen algorithm for 64x64 bit
-        // matrices. In it's current form it is much slower than the four russians algorithm, but it
+        // matrices. In it's current form it is slower than the four russians algorithm, but it
         // is included for reference.
 
-        // let a00: [u32; 32] = array::from_fn(|i| self[i]  as u32);
-        // let a01: [u32; 32] = array::from_fn(|i| (self[i] >> 32) as u32);
-        // let a10: [u32; 32] = array::from_fn(|i| (self[i + 32] ) as u32);
-        // let a11: [u32; 32] = array::from_fn(|i| (self[i + 32] >> 32) as u32);
+        // let mut a00: [u32; 32] = [0; 32];
+        // let mut a01: [u32; 32] = [0; 32];
+        // let mut a10: [u32; 32] = [0; 32];
+        // let mut a11: [u32; 32] = [0; 32];
 
-        // let b00: [u32; 32] = array::from_fn(|i| rhs[i]  as u32);
-        // let b01: [u32; 32] = array::from_fn(|i| (rhs[i] >> 32) as u32);
-        // let b10: [u32; 32] = array::from_fn(|i| rhs[i + 32]  as u32);
-        // let b11: [u32; 32] = array::from_fn(|i| (rhs[i + 32] >> 32) as u32);
+        // let mut b00: [u32; 32] = [0; 32];
+        // let mut b01: [u32; 32] = [0; 32];
+        // let mut b10: [u32; 32] = [0; 32];
+        // let mut b11: [u32; 32] = [0; 32];
+
+        // for i in 0..32 {
+        //     a00[i] = self[i] as u32;
+        //     a01[i] = (self[i] >> 32) as u32;
+        //     a10[i] = self[i + 32] as u32;
+        //     a11[i] = (self[i + 32] >> 32) as u32;
+
+        //     b00[i] = rhs[i] as u32;
+        //     b01[i] = (rhs[i] >> 32) as u32;
+        //     b10[i] = rhs[i + 32] as u32;
+        //     b11[i] = (rhs[i + 32] >> 32) as u32;
+        // }
 
         // let m0 = a00.xor(a11).matmul(b00.xor(b11));
         // let m1 = a10.xor(a11).matmul(b00);
@@ -1071,12 +1083,13 @@ impl BitMatrix for [u64; 64] {
         const SUM_TABLE_LEN: usize = 1 << STRIPE_BITS;
         const STRIPE_INDEX: [usize; SUM_TABLE_LEN] = gray_code_diffs();
         const ROW_SUM_INDEX: [usize; SUM_TABLE_LEN] = gray_code_index();
+        const STRIPES: usize = 64_usize.div_ceil(STRIPE_BITS);
 
         let mut sums = [0; SUM_TABLE_LEN];
         let mut result = [0; Self::SIZE];
         let mut mask = (1 << STRIPE_BITS) - 1;
         let mut shift = 0;
-        for _ in 0..((Self::SIZE + STRIPE_BITS - 1) / STRIPE_BITS) {
+        for _ in 0..STRIPES {
             let range = shift..(shift + STRIPE_BITS).min(Self::SIZE);
             let stripe = &rhs[range];
             for i in 1..SUM_TABLE_LEN {
@@ -1138,217 +1151,24 @@ impl BitMatrix for [u64; 64] {
     }
 
     fn transpose(&mut self) {
-        macro_rules! delta_exchange {
-            ($a:literal, $b:literal, $mask:expr, $shift:literal) => {
-                let t = ((self[$b] >> $shift) ^ self[$a]) & $mask;
-                self[$a] ^= t;
-                self[$b] ^= t << $shift;
-            };
+        // This implementation is based on the Hacker's Delight 2nd ed. by Henry S. Warren, Jr.
+        // (2013), section 7-3 "Transposing a Bit Matrix". The unrolled version of the
+        // algorithm turned out to be slower than the looped version, so the looped version
+        // is used here.
+        let mut mask: u64 = 0xFFFFFFFF;
+        let mut shift = 32;
+        while shift > 0 {
+            let mut b = 0;
+            while b < 64 {
+                let a = b + shift;
+                let t = (self[a] ^ (self[b] >> shift)) & mask;
+                self[a] ^= t;
+                self[b] ^= t << shift;
+                b = (a + 1) & !shift;
+            }
+            shift >>= 1;
+            mask ^= mask << shift;
         }
-
-        let mask = 0xFFFFFFFF;
-        delta_exchange!(32, 0, mask, 32);
-        delta_exchange!(33, 1, mask, 32);
-        delta_exchange!(34, 2, mask, 32);
-        delta_exchange!(35, 3, mask, 32);
-        delta_exchange!(36, 4, mask, 32);
-        delta_exchange!(37, 5, mask, 32);
-        delta_exchange!(38, 6, mask, 32);
-        delta_exchange!(39, 7, mask, 32);
-        delta_exchange!(40, 8, mask, 32);
-        delta_exchange!(41, 9, mask, 32);
-        delta_exchange!(42, 10, mask, 32);
-        delta_exchange!(43, 11, mask, 32);
-        delta_exchange!(44, 12, mask, 32);
-        delta_exchange!(45, 13, mask, 32);
-        delta_exchange!(46, 14, mask, 32);
-        delta_exchange!(47, 15, mask, 32);
-        delta_exchange!(48, 16, mask, 32);
-        delta_exchange!(49, 17, mask, 32);
-        delta_exchange!(50, 18, mask, 32);
-        delta_exchange!(51, 19, mask, 32);
-        delta_exchange!(52, 20, mask, 32);
-        delta_exchange!(53, 21, mask, 32);
-        delta_exchange!(54, 22, mask, 32);
-        delta_exchange!(55, 23, mask, 32);
-        delta_exchange!(56, 24, mask, 32);
-        delta_exchange!(57, 25, mask, 32);
-        delta_exchange!(58, 26, mask, 32);
-        delta_exchange!(59, 27, mask, 32);
-        delta_exchange!(60, 28, mask, 32);
-        delta_exchange!(61, 29, mask, 32);
-        delta_exchange!(62, 30, mask, 32);
-        delta_exchange!(63, 31, mask, 32);
-
-        let mask = 0xFFFF0000FFFF;
-        delta_exchange!(16, 0, mask, 16);
-        delta_exchange!(17, 1, mask, 16);
-        delta_exchange!(18, 2, mask, 16);
-        delta_exchange!(19, 3, mask, 16);
-        delta_exchange!(20, 4, mask, 16);
-        delta_exchange!(21, 5, mask, 16);
-        delta_exchange!(22, 6, mask, 16);
-        delta_exchange!(23, 7, mask, 16);
-        delta_exchange!(24, 8, mask, 16);
-        delta_exchange!(25, 9, mask, 16);
-        delta_exchange!(26, 10, mask, 16);
-        delta_exchange!(27, 11, mask, 16);
-        delta_exchange!(28, 12, mask, 16);
-        delta_exchange!(29, 13, mask, 16);
-        delta_exchange!(30, 14, mask, 16);
-        delta_exchange!(31, 15, mask, 16);
-        delta_exchange!(48, 32, mask, 16);
-        delta_exchange!(49, 33, mask, 16);
-        delta_exchange!(50, 34, mask, 16);
-        delta_exchange!(51, 35, mask, 16);
-        delta_exchange!(52, 36, mask, 16);
-        delta_exchange!(53, 37, mask, 16);
-        delta_exchange!(54, 38, mask, 16);
-        delta_exchange!(55, 39, mask, 16);
-        delta_exchange!(56, 40, mask, 16);
-        delta_exchange!(57, 41, mask, 16);
-        delta_exchange!(58, 42, mask, 16);
-        delta_exchange!(59, 43, mask, 16);
-        delta_exchange!(60, 44, mask, 16);
-        delta_exchange!(61, 45, mask, 16);
-        delta_exchange!(62, 46, mask, 16);
-        delta_exchange!(63, 47, mask, 16);
-
-        let mask = 0xFF00FF00FF00FF;
-        delta_exchange!(8, 0, mask, 8);
-        delta_exchange!(9, 1, mask, 8);
-        delta_exchange!(10, 2, mask, 8);
-        delta_exchange!(11, 3, mask, 8);
-        delta_exchange!(12, 4, mask, 8);
-        delta_exchange!(13, 5, mask, 8);
-        delta_exchange!(14, 6, mask, 8);
-        delta_exchange!(15, 7, mask, 8);
-        delta_exchange!(24, 16, mask, 8);
-        delta_exchange!(25, 17, mask, 8);
-        delta_exchange!(26, 18, mask, 8);
-        delta_exchange!(27, 19, mask, 8);
-        delta_exchange!(28, 20, mask, 8);
-        delta_exchange!(29, 21, mask, 8);
-        delta_exchange!(30, 22, mask, 8);
-        delta_exchange!(31, 23, mask, 8);
-        delta_exchange!(40, 32, mask, 8);
-        delta_exchange!(41, 33, mask, 8);
-        delta_exchange!(42, 34, mask, 8);
-        delta_exchange!(43, 35, mask, 8);
-        delta_exchange!(44, 36, mask, 8);
-        delta_exchange!(45, 37, mask, 8);
-        delta_exchange!(46, 38, mask, 8);
-        delta_exchange!(47, 39, mask, 8);
-        delta_exchange!(56, 48, mask, 8);
-        delta_exchange!(57, 49, mask, 8);
-        delta_exchange!(58, 50, mask, 8);
-        delta_exchange!(59, 51, mask, 8);
-        delta_exchange!(60, 52, mask, 8);
-        delta_exchange!(61, 53, mask, 8);
-        delta_exchange!(62, 54, mask, 8);
-        delta_exchange!(63, 55, mask, 8);
-
-        let mask = 0xF0F0F0F0F0F0F0F;
-        delta_exchange!(4, 0, mask, 4);
-        delta_exchange!(5, 1, mask, 4);
-        delta_exchange!(6, 2, mask, 4);
-        delta_exchange!(7, 3, mask, 4);
-        delta_exchange!(12, 8, mask, 4);
-        delta_exchange!(13, 9, mask, 4);
-        delta_exchange!(14, 10, mask, 4);
-        delta_exchange!(15, 11, mask, 4);
-        delta_exchange!(20, 16, mask, 4);
-        delta_exchange!(21, 17, mask, 4);
-        delta_exchange!(22, 18, mask, 4);
-        delta_exchange!(23, 19, mask, 4);
-        delta_exchange!(28, 24, mask, 4);
-        delta_exchange!(29, 25, mask, 4);
-        delta_exchange!(30, 26, mask, 4);
-        delta_exchange!(31, 27, mask, 4);
-        delta_exchange!(36, 32, mask, 4);
-        delta_exchange!(37, 33, mask, 4);
-        delta_exchange!(38, 34, mask, 4);
-        delta_exchange!(39, 35, mask, 4);
-        delta_exchange!(44, 40, mask, 4);
-        delta_exchange!(45, 41, mask, 4);
-        delta_exchange!(46, 42, mask, 4);
-        delta_exchange!(47, 43, mask, 4);
-        delta_exchange!(52, 48, mask, 4);
-        delta_exchange!(53, 49, mask, 4);
-        delta_exchange!(54, 50, mask, 4);
-        delta_exchange!(55, 51, mask, 4);
-        delta_exchange!(60, 56, mask, 4);
-        delta_exchange!(61, 57, mask, 4);
-        delta_exchange!(62, 58, mask, 4);
-        delta_exchange!(63, 59, mask, 4);
-
-        let mask = 0x3333333333333333;
-        delta_exchange!(2, 0, mask, 2);
-        delta_exchange!(3, 1, mask, 2);
-        delta_exchange!(6, 4, mask, 2);
-        delta_exchange!(7, 5, mask, 2);
-        delta_exchange!(10, 8, mask, 2);
-        delta_exchange!(11, 9, mask, 2);
-        delta_exchange!(14, 12, mask, 2);
-        delta_exchange!(15, 13, mask, 2);
-        delta_exchange!(18, 16, mask, 2);
-        delta_exchange!(19, 17, mask, 2);
-        delta_exchange!(22, 20, mask, 2);
-        delta_exchange!(23, 21, mask, 2);
-        delta_exchange!(26, 24, mask, 2);
-        delta_exchange!(27, 25, mask, 2);
-        delta_exchange!(30, 28, mask, 2);
-        delta_exchange!(31, 29, mask, 2);
-        delta_exchange!(34, 32, mask, 2);
-        delta_exchange!(35, 33, mask, 2);
-        delta_exchange!(38, 36, mask, 2);
-        delta_exchange!(39, 37, mask, 2);
-        delta_exchange!(42, 40, mask, 2);
-        delta_exchange!(43, 41, mask, 2);
-        delta_exchange!(46, 44, mask, 2);
-        delta_exchange!(47, 45, mask, 2);
-        delta_exchange!(50, 48, mask, 2);
-        delta_exchange!(51, 49, mask, 2);
-        delta_exchange!(54, 52, mask, 2);
-        delta_exchange!(55, 53, mask, 2);
-        delta_exchange!(58, 56, mask, 2);
-        delta_exchange!(59, 57, mask, 2);
-        delta_exchange!(62, 60, mask, 2);
-        delta_exchange!(63, 61, mask, 2);
-
-        let mask = 0x5555555555555555;
-        delta_exchange!(1, 0, mask, 1);
-        delta_exchange!(3, 2, mask, 1);
-        delta_exchange!(5, 4, mask, 1);
-        delta_exchange!(7, 6, mask, 1);
-        delta_exchange!(9, 8, mask, 1);
-        delta_exchange!(11, 10, mask, 1);
-        delta_exchange!(13, 12, mask, 1);
-        delta_exchange!(15, 14, mask, 1);
-        delta_exchange!(17, 16, mask, 1);
-        delta_exchange!(19, 18, mask, 1);
-        delta_exchange!(21, 20, mask, 1);
-        delta_exchange!(23, 22, mask, 1);
-        delta_exchange!(25, 24, mask, 1);
-        delta_exchange!(27, 26, mask, 1);
-        delta_exchange!(29, 28, mask, 1);
-        delta_exchange!(31, 30, mask, 1);
-        delta_exchange!(33, 32, mask, 1);
-        delta_exchange!(35, 34, mask, 1);
-        delta_exchange!(37, 36, mask, 1);
-        delta_exchange!(39, 38, mask, 1);
-        delta_exchange!(41, 40, mask, 1);
-        delta_exchange!(43, 42, mask, 1);
-        delta_exchange!(45, 44, mask, 1);
-        delta_exchange!(47, 46, mask, 1);
-        delta_exchange!(49, 48, mask, 1);
-        delta_exchange!(51, 50, mask, 1);
-        delta_exchange!(53, 52, mask, 1);
-        delta_exchange!(55, 54, mask, 1);
-        delta_exchange!(57, 56, mask, 1);
-        delta_exchange!(59, 58, mask, 1);
-        delta_exchange!(61, 60, mask, 1);
-        delta_exchange!(63, 62, mask, 1);
     }
 
     fn zip<F>(&self, rhs: &Self, mut f: F) -> Self
