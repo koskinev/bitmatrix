@@ -1,6 +1,6 @@
 mod matrix;
 #[cfg(test)]
 #[allow(dead_code)]
-mod wyrand;
+mod rng;
 
 pub use matrix::BitMatrix;
