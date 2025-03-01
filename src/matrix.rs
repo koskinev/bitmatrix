@@ -584,28 +584,18 @@ impl BitMatrix for [u8; 8] {
     fn sort_rows(&mut self) {
         for row in self.iter_mut() {
             let shift = row.count_zeros();
-            let (x, overflow) = Self::RowRepr::MAX.overflowing_shl(shift);
-            *row = x * (!overflow as Self::RowRepr);
+            *row = if shift < Self::RowRepr::BITS {
+                Self::RowRepr::MAX << shift
+            } else {
+                0
+            };
         }
     }
 
     fn sort_columns(&mut self) {
-        let mut mask = 0;
-        let mut unsorted = 0;
-        let mut temp = *self;
-        for row in &*self {
-            mask |= *row;
-            unsorted |= *row ^ mask;
-        }
-        while unsorted > 0 {
-            mask = 1 << unsorted.trailing_zeros();
-            temp.sort_unstable_by_key(|row| row & mask);
-            for (row, bits) in self.iter_mut().zip(temp.iter()) {
-                *row &= !mask;
-                *row |= bits & mask;
-            }
-            unsorted ^= mask;
-        }
+        self.transpose();
+        self.sort_rows();
+        self.transpose();
     }
 
     fn transpose(&mut self) {
@@ -725,33 +715,18 @@ impl BitMatrix for [u16; 16] {
     fn sort_rows(&mut self) {
         for row in self.iter_mut() {
             let shift = row.count_zeros();
-            let (x, overflow) = Self::RowRepr::MAX.overflowing_shl(shift);
-            *row = x * (!overflow as Self::RowRepr);
+            *row = if shift < Self::RowRepr::BITS {
+                Self::RowRepr::MAX << shift
+            } else {
+                0
+            };
         }
     }
 
     fn sort_columns(&mut self) {
-        let mut mask = 0;
-        let mut unsorted = 0;
-        let mut temp = *self;
-        for row in &*self {
-            mask |= *row;
-            unsorted |= *row ^ mask;
-        }
-        while unsorted > 0 {
-            mask = 1 << unsorted.trailing_zeros();
-            if let Some(l) = temp.iter().position(|row| row & mask != 0) {
-                if let Some(x) = temp[l..].iter().rposition(|row| row & mask == 0) {
-                    let r = x + l + 1;
-                    temp[l..r].sort_unstable_by_key(|row| row & mask);
-                }
-            }
-            for (row, bits) in self.iter_mut().zip(temp.iter()) {
-                *row &= !(mask);
-                *row |= bits & mask;
-            }
-            unsorted &= !mask;
-        }
+        self.transpose();
+        self.sort_rows();
+        self.transpose();
     }
 
     fn transpose(&mut self) {
@@ -890,33 +865,18 @@ impl BitMatrix for [u32; 32] {
     fn sort_rows(&mut self) {
         for row in self.iter_mut() {
             let shift = row.count_zeros();
-            let (x, overflow) = Self::RowRepr::MAX.overflowing_shl(shift);
-            *row = x * (!overflow as Self::RowRepr);
+            *row = if shift < Self::RowRepr::BITS {
+                Self::RowRepr::MAX << shift
+            } else {
+                0
+            };
         }
     }
 
     fn sort_columns(&mut self) {
-        let mut mask = 0;
-        let mut unsorted = 0;
-        let mut temp = *self;
-        for row in &*self {
-            mask |= *row;
-            unsorted |= *row ^ mask;
-        }
-        while unsorted > 0 {
-            mask = 1 << unsorted.trailing_zeros();
-            if let Some(l) = temp.iter().position(|row| row & mask != 0) {
-                if let Some(x) = temp[l..].iter().rposition(|row| row & mask == 0) {
-                    let r = x + l + 1;
-                    temp[l..r].sort_unstable_by_key(|row| row & mask);
-                }
-            }
-            for (row, bits) in self.iter_mut().zip(temp.iter()) {
-                *row &= !(mask);
-                *row |= bits & mask;
-            }
-            unsorted &= !mask;
-        }
+        self.transpose();
+        self.sort_rows();
+        self.transpose();
     }
 
     fn transpose(&mut self) {
@@ -1121,33 +1081,18 @@ impl BitMatrix for [u64; 64] {
     fn sort_rows(&mut self) {
         for row in self.iter_mut() {
             let shift = row.count_zeros();
-            let (x, overflow) = Self::RowRepr::MAX.overflowing_shl(shift);
-            *row = x * (!overflow as Self::RowRepr);
+            *row = if shift < Self::RowRepr::BITS {
+                Self::RowRepr::MAX << shift
+            } else {
+                0
+            };
         }
     }
 
     fn sort_columns(&mut self) {
-        let mut mask = 0;
-        let mut unsorted = 0;
-        let mut temp = *self;
-        for row in &*self {
-            mask |= *row;
-            unsorted |= *row ^ mask;
-        }
-        while unsorted > 0 {
-            mask = 1 << unsorted.trailing_zeros();
-            if let Some(l) = temp.iter().position(|row| row & mask != 0) {
-                if let Some(x) = temp[l..].iter().rposition(|row| row & mask == 0) {
-                    let r = x + l + 1;
-                    temp[l..r].sort_unstable_by_key(|row| row & mask);
-                }
-            }
-            for (row, bits) in self.iter_mut().zip(temp.iter()) {
-                *row &= !(mask);
-                *row |= bits & mask;
-            }
-            unsorted &= !mask;
-        }
+        self.transpose();
+        self.sort_rows();
+        self.transpose();
     }
 
     fn transpose(&mut self) {
