@@ -376,13 +376,13 @@ fn sort_row_bits_u8() {
 #[test]
 fn sort_column_bits_u8() {
     let mut matrix = [
-        0b_0_0_0_1_0_0_0_0,
-        0b_0_1_0_0_0_1_0_0,
+        0b_0_0_0_0_0_0_0_0,
+        0b_0_1_0_1_0_1_0_0,
         0b_0_0_1_0_1_0_1_0,
         0b_1_0_1_1_0_1_0_0,
         0b_0_1_1_0_1_0_1_0,
-        0b_0_1_1_1_1_1_0_1,
-        0b_0_1_1_1_1_1_1_1,
+        0b_0_1_0_1_1_1_0_1,
+        0b_1_1_1_1_1_1_1_1,
         0b_1_1_1_1_1_1_1_1,
     ];
     matrix.sort_columns();
@@ -391,12 +391,77 @@ fn sort_column_bits_u8() {
         [
             0b_0_0_0_0_0_0_0_0,
             0b_0_0_0_0_0_0_0_0,
-            0b_0_0_1_0_0_0_0_0,
+            0b_0_0_0_0_0_0_0_0,
             0b_0_1_1_1_1_1_0_0,
             0b_0_1_1_1_1_1_1_0,
-            0b_0_1_1_1_1_1_1_1,
+            0b_1_1_1_1_1_1_1_1,
             0b_1_1_1_1_1_1_1_1,
             0b_1_1_1_1_1_1_1_1,
         ]
     );
+
+    matrix = [u8::MAX, 0, 0, 0, 0, 0, 0, 0];
+    matrix.sort_columns();
+    assert_eq!(matrix, [0, 0, 0, 0, 0, 0, 0, u8::MAX]);
+
+    const ITERS: usize = 1000;
+    let rng: Rng = Default::default();
+    type Mat = [u8; 8];
+
+    for _i in 0..ITERS {
+        let mut matrix: Mat = rng.random();
+        let mut sorted = matrix;
+        sorted.sort_columns();
+        matrix.transpose();
+        matrix.sort_rows();
+        matrix.transpose();
+        assert_eq!(matrix, sorted);
+    }
+}
+
+#[ignore]
+#[test]
+fn sort_columns_perf() {
+    // cargo test --release -- --nocapture --ignored sort_columns_perf
+
+    use std::time::Instant;
+
+    fn run<U, const N: usize>(count: usize)
+    where
+        [U; N]: BitMatrix,
+        U: Copy + std::fmt::Debug + PartialEq + Random<Rng>,
+    {
+        // Generate test matrices.
+        let rng: Rng = Default::default();
+        let original: Vec<[U; N]> = (0..count).map(|_| rng.random()).collect();
+
+        // Create a mutable copy of the original matrices.
+        let mut sorted = original.clone();
+
+        // Transpose each matrix and measure the time.
+        let start = Instant::now();
+        for matrix in &mut sorted {
+            matrix.sort_columns();
+        }
+        let duration = start.elapsed();
+
+        // Check that the columns were sorted correctly.
+        for (matrix, sorted) in original.iter().zip(sorted.iter()) {
+            let mut check = *matrix;
+            check.transpose();
+            check.sort_rows();
+            check.transpose();
+            assert_eq!(check, *sorted);
+        }
+
+        println!(
+            "Sort columns {N}x{N}: {duration:?} (sample size {count}, {tput:.6} ns / bit)",
+            tput = duration.as_nanos() as f64 / (N * N * count) as f64
+        );
+    }
+
+    run::<u8, 8>(100_000_000);
+    run::<u16, 16>(50_000_000);
+    run::<u32, 32>(25_000_000);
+    run::<u64, 64>(10_000_000);
 }
