@@ -1,4 +1,4 @@
-// Run with `cargo bench --bench bitmatrix` and options like `--large` and `--no-verify` (see
+// Run with `cargo bench --bench bitmatrix_ops` and options like `--large` and `--no-verify` (see
 // `--help`).
 use std::env;
 use std::hint::black_box;
