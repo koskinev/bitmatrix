@@ -9,6 +9,16 @@ fn assert_same_bits(lhs: &BitMatrix, rhs: &BitMatrix) {
     }
 }
 
+fn assert_zero_outside_overlap(matrix: &BitMatrix, preserved_rows: usize, preserved_cols: usize) {
+    for row in 0..matrix.rows() {
+        for col in 0..matrix.cols() {
+            if row >= preserved_rows || col >= preserved_cols {
+                assert_eq!(matrix.get(row, col), 0, "expected zero at ({row}, {col})");
+            }
+        }
+    }
+}
+
 fn naive_matmul(lhs: &BitMatrix, rhs: &BitMatrix) -> BitMatrix {
     assert_eq!(lhs.cols(), rhs.rows());
 
@@ -52,16 +62,6 @@ fn patterned(rows: usize, cols: usize) -> BitMatrix {
     matrix
 }
 
-fn assert_zero_outside_overlap(matrix: &BitMatrix, preserved_rows: usize, preserved_cols: usize) {
-    for row in 0..matrix.rows() {
-        for col in 0..matrix.cols() {
-            if row >= preserved_rows || col >= preserved_cols {
-                assert_eq!(matrix.get(row, col), 0, "expected zero at ({row}, {col})");
-            }
-        }
-    }
-}
-
 #[test]
 fn test_bitwise_operations_match_pointwise_logic() {
     let lhs = patterned(65, 70);
@@ -101,20 +101,6 @@ fn test_counts_and_padding_are_correct() {
     assert_eq!(rows.len(), 100);
     assert_eq!(rows[0].len(), 3);
     assert_eq!(rows[0][2] >> 9, 0);
-}
-
-#[test]
-fn test_empty_matrices_are_supported() {
-    let matrix = BitMatrix::new(0, 12);
-    assert!(matrix.is_empty());
-    assert_eq!(matrix.count_ones(), 0);
-    assert_eq!(matrix.count_zeros(), 0);
-    assert_eq!(matrix.transposed().dimensions(), (12, 0));
-
-    let lhs = BitMatrix::new(7, 0);
-    let rhs = BitMatrix::new(0, 9);
-    assert_eq!(lhs.matmul(&rhs), BitMatrix::new(7, 9));
-    assert_eq!(lhs.matmul_or(&rhs), BitMatrix::new(7, 9));
 }
 
 #[test]
@@ -161,15 +147,17 @@ fn test_display_uses_boundary_for_pretty_printing() {
 }
 
 #[test]
-fn test_from_rows_puts_least_significant_bits_to_left() {
-    let matrix = BitMatrix::from_rows([[0b001], [0b010], [0b111]], 3);
-    let expected = concat!(
-        "BitMatrix {rows: 3, cols: 3}\n",
-        "[ 1 0 0\n",
-        "  0 1 0\n",
-        "  1 1 1 ]",
-    );
-    assert_eq!(matrix.to_string(), expected);
+fn test_empty_matrices_are_supported() {
+    let matrix = BitMatrix::new(0, 12);
+    assert!(matrix.is_empty());
+    assert_eq!(matrix.count_ones(), 0);
+    assert_eq!(matrix.count_zeros(), 0);
+    assert_eq!(matrix.transposed().dimensions(), (12, 0));
+
+    let lhs = BitMatrix::new(7, 0);
+    let rhs = BitMatrix::new(0, 9);
+    assert_eq!(lhs.matmul(&rhs), BitMatrix::new(7, 9));
+    assert_eq!(lhs.matmul_or(&rhs), BitMatrix::new(7, 9));
 }
 
 #[test]
@@ -191,81 +179,15 @@ fn test_from_rows_masks_padding() {
 }
 
 #[test]
-fn test_resize_grows_and_zero_fills() {
-    let original = patterned(63, 70);
-    let mut resized = original.clone();
-
-    resized.resize(70, 130);
-
-    assert_eq!(resized.dimensions(), (70, 130));
-    for row in 0..original.rows() {
-        for col in 0..original.cols() {
-            assert_eq!(resized.get(row, col), original.get(row, col));
-        }
-    }
-    assert_zero_outside_overlap(&resized, original.rows(), original.cols());
-}
-
-#[test]
-fn test_resize_shrinks_and_truncates() {
-    let original = patterned(100, 137);
-    let mut resized = original.clone();
-
-    resized.resize(63, 70);
-
-    assert_eq!(resized.dimensions(), (63, 70));
-    for row in 0..resized.rows() {
-        for col in 0..resized.cols() {
-            assert_eq!(resized.get(row, col), original.get(row, col));
-        }
-    }
-}
-
-#[test]
-fn test_resize_clears_stale_bits_after_shrink_then_grow() {
-    let mut matrix = BitMatrix::new(70, 70);
-    for row in 0..matrix.rows() {
-        for col in 0..matrix.cols() {
-            matrix.set(row, col, 1);
-        }
-    }
-
-    matrix.resize(10, 10);
-    matrix.resize(70, 70);
-
-    for row in 0..10 {
-        for col in 0..10 {
-            assert_eq!(matrix.get(row, col), 1);
-        }
-    }
-    assert_zero_outside_overlap(&matrix, 10, 10);
-}
-
-#[test]
-fn test_resize_handles_zero_dimensions() {
-    let original = patterned(7, 9);
-    let mut matrix = original.clone();
-
-    matrix.resize(0, 9);
-    assert_eq!(matrix.dimensions(), (0, 9));
-    assert!(matrix.is_empty());
-
-    matrix.resize(7, 0);
-    assert_eq!(matrix.dimensions(), (7, 0));
-    assert!(matrix.is_empty());
-
-    matrix.resize(0, 0);
-    assert_eq!(matrix.dimensions(), (0, 0));
-    assert!(matrix.is_empty());
-
-    matrix.resize(7, 9);
-    assert_eq!(matrix.dimensions(), (7, 9));
-    assert_zero_outside_overlap(&matrix, 0, 0);
-
-    let mut restored = original;
-    restored.resize(0, 0);
-    restored.resize(7, 9);
-    assert_eq!(restored, matrix);
+fn test_from_rows_puts_least_significant_bits_to_left() {
+    let matrix = BitMatrix::from_rows([[0b001], [0b010], [0b111]], 3);
+    let expected = concat!(
+        "BitMatrix {rows: 3, cols: 3}\n",
+        "[ 1 0 0\n",
+        "  0 1 0\n",
+        "  1 1 1 ]",
+    );
+    assert_eq!(matrix.to_string(), expected);
 }
 
 #[test]
@@ -300,17 +222,6 @@ fn test_matmul_or_identity_handles_rectangular_matrices() {
 }
 
 #[test]
-fn test_matmul_or_matches_naive_reference_on_odd_dimensions() {
-    let lhs = patterned(67, 70);
-    let rhs = patterned(70, 65);
-
-    let actual = lhs.matmul_or(&rhs);
-    let expected = naive_matmul_or(&lhs, &rhs);
-
-    assert_same_bits(&actual, &expected);
-}
-
-#[test]
 fn test_matmul_or_matches_naive_reference_across_block_boundaries() {
     for &(lhs_rows, shared, rhs_cols) in &[(64, 64, 64), (65, 64, 66), (66, 65, 64), (129, 65, 67)]
     {
@@ -325,12 +236,117 @@ fn test_matmul_or_matches_naive_reference_across_block_boundaries() {
 }
 
 #[test]
+fn test_matmul_or_matches_naive_reference_on_odd_dimensions() {
+    let lhs = patterned(67, 70);
+    let rhs = patterned(70, 65);
+
+    let actual = lhs.matmul_or(&rhs);
+    let expected = naive_matmul_or(&lhs, &rhs);
+
+    assert_same_bits(&actual, &expected);
+}
+
+#[test]
 fn test_matmul_or_preserves_even_overlap_where_gf2_cancels() {
     let lhs = BitMatrix::from_rows([[0b101]], 3);
     let rhs = BitMatrix::from_rows([[0b1], [0b0], [0b1]], 1);
 
     assert_eq!(lhs.matmul(&rhs).get(0, 0), 0);
     assert_eq!(lhs.matmul_or(&rhs).get(0, 0), 1);
+}
+
+#[test]
+fn test_resize_clears_stale_bits_after_shrink_then_grow() {
+    let mut matrix = BitMatrix::new(70, 70);
+    for row in 0..matrix.rows() {
+        for col in 0..matrix.cols() {
+            matrix.set(row, col, 1);
+        }
+    }
+
+    matrix.resize(10, 10);
+    matrix.resize(70, 70);
+
+    for row in 0..10 {
+        for col in 0..10 {
+            assert_eq!(matrix.get(row, col), 1);
+        }
+    }
+    assert_zero_outside_overlap(&matrix, 10, 10);
+}
+
+#[test]
+fn test_resize_grows_and_zero_fills() {
+    let original = patterned(63, 70);
+    let mut resized = original.clone();
+
+    resized.resize(70, 130);
+
+    assert_eq!(resized.dimensions(), (70, 130));
+    for row in 0..original.rows() {
+        for col in 0..original.cols() {
+            assert_eq!(resized.get(row, col), original.get(row, col));
+        }
+    }
+    assert_zero_outside_overlap(&resized, original.rows(), original.cols());
+}
+
+#[test]
+fn test_resize_handles_zero_dimensions() {
+    let original = patterned(7, 9);
+    let mut matrix = original.clone();
+
+    matrix.resize(0, 9);
+    assert_eq!(matrix.dimensions(), (0, 9));
+    assert!(matrix.is_empty());
+
+    matrix.resize(7, 0);
+    assert_eq!(matrix.dimensions(), (7, 0));
+    assert!(matrix.is_empty());
+
+    matrix.resize(0, 0);
+    assert_eq!(matrix.dimensions(), (0, 0));
+    assert!(matrix.is_empty());
+
+    matrix.resize(7, 9);
+    assert_eq!(matrix.dimensions(), (7, 9));
+    assert_zero_outside_overlap(&matrix, 0, 0);
+
+    let mut restored = original;
+    restored.resize(0, 0);
+    restored.resize(7, 9);
+    assert_eq!(restored, matrix);
+}
+
+#[test]
+fn test_resize_shrinks_and_truncates() {
+    let original = patterned(100, 137);
+    let mut resized = original.clone();
+
+    resized.resize(63, 70);
+
+    assert_eq!(resized.dimensions(), (63, 70));
+    for row in 0..resized.rows() {
+        for col in 0..resized.cols() {
+            assert_eq!(resized.get(row, col), original.get(row, col));
+        }
+    }
+}
+
+#[test]
+fn test_transpose_handles_rectangular_and_odd_dimensions() {
+    for (rows, cols) in [(1, 1), (1, 65), (65, 1), (63, 70), (70, 63), (100, 137)] {
+        let matrix = patterned(rows, cols);
+        let transpose = matrix.transposed();
+
+        assert_eq!(transpose.dimensions(), (cols, rows));
+        for row in 0..rows {
+            for col in 0..cols {
+                assert_eq!(matrix.get(row, col), transpose.get(col, row));
+            }
+        }
+        assert_eq!(transpose.transposed(), matrix);
+    }
 }
 
 #[test]
@@ -355,18 +371,6 @@ fn test_try_inverse_inverts_known_small_matrix() {
 }
 
 #[test]
-fn test_try_inverse_roundtrips_block_boundary_matrices() {
-    for size in [2, 63, 64, 65, 127, 128, 129] {
-        let matrix = BitMatrix::from_fn(size, size, |row, col| row == col || col == row + 1);
-
-        let inverse = matrix.try_inverse().unwrap();
-
-        assert_eq!(matrix.matmul(&inverse), BitMatrix::identity(size));
-        assert_eq!(inverse.matmul(&matrix), BitMatrix::identity(size));
-    }
-}
-
-#[test]
 fn test_try_inverse_m4ri_matches_gauss_jordan() {
     for size in [32, 33, 63, 64, 65, 127, 128, 129] {
         let matrix = BitMatrix::from_fn(size, size, |row, col| {
@@ -385,6 +389,12 @@ fn test_try_inverse_m4ri_returns_none_for_singular_matrix() {
 }
 
 #[test]
+#[should_panic]
+fn test_try_inverse_panics_for_non_square_matrices() {
+    BitMatrix::new(2, 3).try_inverse();
+}
+
+#[test]
 fn test_try_inverse_returns_none_for_singular_matrices() {
     assert_eq!(BitMatrix::new(4, 4).try_inverse(), None);
 
@@ -393,23 +403,13 @@ fn test_try_inverse_returns_none_for_singular_matrices() {
 }
 
 #[test]
-#[should_panic]
-fn test_try_inverse_panics_for_non_square_matrices() {
-    BitMatrix::new(2, 3).try_inverse();
-}
+fn test_try_inverse_roundtrips_block_boundary_matrices() {
+    for size in [2, 63, 64, 65, 127, 128, 129] {
+        let matrix = BitMatrix::from_fn(size, size, |row, col| row == col || col == row + 1);
 
-#[test]
-fn test_transpose_handles_rectangular_and_odd_dimensions() {
-    for (rows, cols) in [(1, 1), (1, 65), (65, 1), (63, 70), (70, 63), (100, 137)] {
-        let matrix = patterned(rows, cols);
-        let transpose = matrix.transposed();
+        let inverse = matrix.try_inverse().unwrap();
 
-        assert_eq!(transpose.dimensions(), (cols, rows));
-        for row in 0..rows {
-            for col in 0..cols {
-                assert_eq!(matrix.get(row, col), transpose.get(col, row));
-            }
-        }
-        assert_eq!(transpose.transposed(), matrix);
+        assert_eq!(matrix.matmul(&inverse), BitMatrix::identity(size));
+        assert_eq!(inverse.matmul(&matrix), BitMatrix::identity(size));
     }
 }
