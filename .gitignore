@@ -1,4 +1,5 @@
 .vscode/
+reference/
 /__pycache__
 /target
 Cargo.lock

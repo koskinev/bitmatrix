@@ -1,11 +1,767 @@
+use core::f64;
 use std::{
     cell::Cell,
-    ops::{Bound, RangeBounds},
-    sync::{
-        atomic::{AtomicU64, Ordering},
-        LazyLock,
-    },
+    hash::{BuildHasher, RandomState},
+    ops::{Bound, Deref, RangeBounds},
+    sync::atomic::{AtomicU64, Ordering},
 };
+
+/// A thread-safe random number generator with `AtomicU64`-backed state.
+///
+/// This RNG can be shared safely across threads without requiring mutable references, at the
+/// cost of lower throughput due to atomic operations.
+pub type A64Rng = Rng<A64>;
+
+/// A random number generator designed for single-threaded contexts with `Cell`-backed 64-bit state.
+pub type C64Rng = Rng<C64>;
+
+/// A random number generator designed for single-threaded contexts with `Cell`-backed 128-bit
+/// state.
+pub type C128Rng = Rng<C128>;
+
+/// A minimal core RNG interface for driving higher-level random generation.
+///
+/// This trait defines the core `u64` stream and seeding interface used by [`Rng`].
+pub trait Core: Sized {
+    /// Initializes a new RNG instance.
+    fn new() -> Self;
+
+    /// Returns the next `u64` value from the pseudorandom sequence.
+    fn u64(&self) -> u64;
+
+    /// Reseeds the core RNG with the given seed.
+    fn reseed(&self, seed: u64);
+
+    /// Initializes a new RNG instance with the given seed.
+    fn with_seed(seed: u64) -> Self {
+        let core = Self::new();
+        core.reseed(seed);
+        core
+    }
+}
+
+/// A core RNG with `AtomicU64`-backed state for concurrent use.
+#[derive(Debug)]
+pub struct A64 {
+    pub(crate) state: AtomicU64,
+}
+
+/// A core RNG with `Cell<u64>`-backed state for single-threaded use.
+#[derive(Debug, Clone)]
+pub struct C64 {
+    pub(crate) state: Cell<u64>,
+}
+
+/// A core RNG with `Cell<u128>`-backed state for single-threaded use.
+#[derive(Debug, Clone)]
+pub struct C128 {
+    pub(crate) state: Cell<u128>,
+}
+
+impl Core for A64 {
+    fn new() -> Self {
+        let state = AtomicU64::new(seed());
+        Self { state }
+    }
+
+    fn u64(&self) -> u64 {
+        let old_state = self.state.fetch_add(INC_64, Ordering::Relaxed);
+        wyhash64(old_state)
+    }
+
+    fn reseed(&self, seed: u64) {
+        self.state.store(seed, Ordering::Relaxed);
+    }
+
+    fn with_seed(seed: u64) -> Self {
+        Self {
+            state: AtomicU64::new(seed),
+        }
+    }
+}
+
+impl Core for C64 {
+    fn new() -> Self {
+        let state = Cell::new(seed());
+        Self { state }
+    }
+
+    fn u64(&self) -> u64 {
+        let old_state = self.state.get();
+        self.state.set(old_state.wrapping_add(INC_64));
+        wyhash64(old_state)
+    }
+
+    fn reseed(&self, seed: u64) {
+        self.state.set(seed);
+    }
+
+    fn with_seed(seed: u64) -> Self {
+        Self {
+            state: Cell::new(seed),
+        }
+    }
+}
+
+impl Core for C128 {
+    fn new() -> Self {
+        let seed = (seed() as u128) << 64 | seed() as u128;
+        let state = Cell::new(seed);
+        Self { state }
+    }
+
+    fn u64(&self) -> u64 {
+        let old_state = self.state.get();
+        self.state.set(old_state.wrapping_add(INC_128));
+        wyhash128(old_state) as _
+    }
+
+    fn reseed(&self, seed: u64) {
+        self.state.set(seed as u128);
+    }
+
+    fn with_seed(seed: u64) -> Self {
+        Self {
+            state: Cell::new(seed as u128),
+        }
+    }
+}
+
+/// A generic RNG wrapper providing higher-level random data generation.
+#[derive(Debug, Clone, Copy)]
+pub struct Rng<C> {
+    core: C,
+}
+
+#[derive(Debug)]
+/// An iterator that yields mutable references to elements from a slice in random order.
+///
+/// Each call to [`Iterator::next`] performs a single Fisher-Yates step on the remaining prefix of
+/// the slice and returns a mutable reference to the selected element.
+pub struct ShuffleIter<'a, C, T> {
+    rng: &'a Rng<C>,
+    remaining: &'a mut [T],
+}
+
+#[derive(Debug)]
+/// A selector for picking a random element with uniform probability from a stream of observed
+/// elements using reservoir sampling.
+pub struct UniformSelector<C, T> {
+    /// The RNG used for sampling.
+    rng: Rng<C>,
+    /// The number of elements seen so far.
+    seen: usize,
+    /// The currently selected element.
+    selected: Option<T>,
+}
+
+/// A selector for picking a random element from a stream of observed elements with probability
+/// proportional to a positive finite weight computed for each element.
+pub struct WeightedSelector<C, T, F> {
+    /// The RNG used for sampling.
+    rng: Rng<C>,
+    /// Computes the weight for each observed element.
+    weight_fn: F,
+    /// The total weight of all participating elements observed so far.
+    sum: f64,
+    /// The correction term for Kahan summation.
+    c: f64,
+    /// The currently selected element.
+    selected: Option<T>,
+}
+
+impl<C: Core> Rng<C> {
+    /// Generates a random value of type `T` within the specified range. For example, `10..20`
+    /// returns a value between 10 (inclusive) and 20 (exclusive).
+    ///
+    /// # Example
+    /// ```rust, ignore
+    /// # use randy::C64Rng;
+    /// let rng = C64Rng::new();
+    /// let value: u32 = rng.bounded(10..20);
+    /// assert!(value >= 10 && value < 20);
+    /// ```
+    pub fn bounded<T, R>(&self, range: R) -> T
+    where
+        T: RandomRange<Self>,
+        R: RangeBounds<T>,
+    {
+        T::random_range(self, range)
+    }
+
+    /// Fills the slice `data` with random bytes.
+    pub fn bytes(&self, data: &mut [u8]) {
+        const CHUNK_SIZE: usize = std::mem::size_of::<u64>();
+        for chunk in data.chunks_exact_mut(CHUNK_SIZE) {
+            let value = self.u64();
+            chunk.copy_from_slice(&value.to_ne_bytes());
+        }
+        let last = (data.len() / CHUNK_SIZE) * CHUNK_SIZE;
+        let bytes = self.u64().to_ne_bytes();
+        for (index, byte) in data[last..].iter_mut().enumerate() {
+            *byte = bytes[index];
+        }
+    }
+
+    /// Chooses a random element from the slice `data` and returns a reference to it. If the slice
+    /// is empty, returns `None`.
+    ///
+    /// # Example
+    /// ```rust, ignore
+    /// # use randy::C64Rng;
+    /// let rng = C64Rng::new();
+    /// let data = [1, 2, 3, 4, 5];
+    /// let value = rng.choose(&data);
+    /// println!("{value:?}");
+    /// ```
+    pub fn choose<'a, T>(&'a self, data: &'a [T]) -> Option<&'a T> {
+        if data.is_empty() {
+            None
+        } else {
+            let index = usize::random_range(self, 0..data.len());
+            Some(&data[index])
+        }
+    }
+
+    /// Chooses a random element yielded by `iter` and returns it. If the iterator is empty,
+    /// returns `None`.
+    ///
+    /// The iterator is consumed exactly once in iteration order. Selection is uniform across all
+    /// yielded elements.
+    ///
+    /// # Example
+    /// ```rust, ignore
+    /// # use randy::C64Rng;
+    /// let rng = C64Rng::new();
+    /// let value = rng.choose_from_iter(1..=5);
+    /// assert!(matches!(value, Some(1..=5)));
+    /// ```
+    pub fn choose_from_iter<T, I>(&self, iter: I) -> Option<T>
+    where
+        I: IntoIterator<Item = T>,
+        usize: RandomRange<Self>,
+    {
+        let mut chosen = None;
+
+        for (index, value) in iter.into_iter().enumerate() {
+            if self.bounded(..(index + 1)) == 0 {
+                chosen = Some(value);
+            }
+        }
+
+        chosen
+    }
+
+    /// Selects an element from `data` according to the softmax distribution induced by `f` and
+    /// temperature `t`. Ignores non-finite values returned by `f`.  If the slice is empty, or if
+    /// all values returned by `f` are non-finite, returns `None`. The temperature is clamped to the
+    /// range `(0, f64::INFINITY]`. `NaN` and non-positive temperatures are treated as
+    /// `f64::MIN_POSITIVE`.
+    ///
+    /// # Example
+    /// ```rust, ignore
+    /// # use randy::C64Rng;
+    /// let rng = C64Rng::new();
+    /// let data = ["a", "bb", "ccc"];
+    /// let picked = rng.choose_softmax(&data, |s| s.len() as f64, 0.5);
+    /// assert!(picked.is_some());
+    /// ```
+    pub fn choose_softmax<'a, T, F>(&self, data: &'a [T], mut f: F, mut t: f64) -> Option<&'a T>
+    where
+        F: FnMut(&T) -> f64,
+        f64: Random<Self>,
+    {
+        if data.is_empty() {
+            return None;
+        }
+
+        t = t.max(f64::MIN_POSITIVE);
+        let mut selected = None;
+        let mut max = f64::NEG_INFINITY;
+
+        for value in data {
+            let score = f(value);
+            if !score.is_finite() {
+                continue;
+            }
+
+            // Gumbel(0, 1) noise
+            let u = f64::random(self).clamp(f64::MIN_POSITIVE, 1.0);
+            let g = -(-u.ln()).ln();
+            let key = score + t * g;
+            if key > max {
+                max = key;
+                selected = Some(value);
+            }
+        }
+        selected
+    }
+
+    /// Chooses a random element from the slice `data` with probability proportional to the
+    /// positive finite weight returned by `weight_fn`.
+    ///
+    /// The weighting closure is evaluated once per element in slice order. Elements whose weights
+    /// are zero, negative, `NaN`, or infinite are ignored. If the slice is empty or if all
+    /// elements are ignored, returns `None`.
+    ///
+    /// # Example
+    /// ```rust, ignore
+    /// # use randy::C64Rng;
+    /// let rng = C64Rng::new();
+    /// let data = [1, 2, 3];
+    /// let picked = rng.choose_weighted(&data, |value| *value as f64);
+    /// assert!(matches!(picked, Some(&1 | &2 | &3)));
+    /// ```
+    pub fn choose_weighted<'a, T, F>(&self, data: &'a [T], mut weight_fn: F) -> Option<&'a T>
+    where
+        F: FnMut(&T) -> f64,
+        f64: Random<Self>,
+    {
+        // We use Kahan/Neumaier-style summation to prevent floating-point precision loss
+        // when accumulating weights over very large slices.
+
+        let mut chosen = None;
+        let mut sum = 0.0;
+        let mut c = 0.0; // Running compensation for lost low-order bits
+
+        for value in data {
+            let weight = weight_fn(value);
+            if !weight.is_finite() || weight <= 0.0 {
+                continue;
+            }
+
+            let t = sum + weight;
+            c += if sum >= weight {
+                (sum - t) + weight
+            } else {
+                (weight - t) + sum
+            };
+            sum = t;
+
+            // The mathematically accurate running total
+            let total = sum + c;
+
+            // Reservoir sampling step
+            if f64::random(self) * total < weight {
+                chosen = Some(value);
+            }
+        }
+
+        chosen
+    }
+
+    /// Chooses a random element from the slice `data` among those that satisfy `predicate` and
+    /// returns a reference to it. If no element satisfies the predicate, returns `None`.
+    ///
+    /// The predicate is evaluated once per element in slice order. Selection is uniform across
+    /// all matching elements.
+    ///
+    /// # Example
+    /// ```rust, ignore
+    /// # use randy::C64Rng;
+    /// let rng = C64Rng::new();
+    /// let data = [1, 2, 3, 4, 5];
+    /// let value = rng.choose_where(&data, |value| value % 2 == 0);
+    /// assert!(matches!(value, Some(&2) | Some(&4)));
+    /// ```
+    pub fn choose_where<'a, T, F>(&self, data: &'a [T], mut predicate: F) -> Option<&'a T>
+    where
+        F: FnMut(&T) -> bool,
+    {
+        let mut chosen = None;
+        let mut matches: usize = 0;
+
+        for value in data {
+            if predicate(value) {
+                matches += 1;
+                if self.bounded(..matches) == 0 {
+                    chosen = Some(value);
+                }
+            }
+        }
+
+        chosen
+    }
+
+    /// Generates an array of `N` distinct random values of type `T` within the specified range.
+    ///
+    /// This method uses rejection sampling: it fills the array with random values from the
+    /// range and re-rolls any value that collides with a previously generated value.
+    ///
+    /// # Warning
+    ///
+    /// This method will loop indefinitely if the provided range contains fewer than `N` distinct
+    /// values.
+    ///
+    /// # Example
+    /// ```rust, ignore
+    /// # use randy::C64Rng;
+    /// let rng = C64Rng::new();
+    /// let values: [u8; 4] = rng.distinct_bounded(0..10);
+    /// assert_eq!(values.len(), 4);
+    /// assert!(values.iter().all(|&v| (0..10).contains(&v)));
+    /// for i in 0..values.len() {
+    ///     for j in (i + 1)..values.len() {
+    ///         assert_ne!(values[i], values[j]);
+    ///     }
+    /// }
+    /// ```
+    pub fn distinct_bounded<T, R, const N: usize>(&self, range: R) -> [T; N]
+    where
+        T: RandomRange<Self> + Copy + PartialEq,
+        R: RangeBounds<T> + Clone,
+    {
+        let mut arr: [T; N] = core::array::from_fn(|_| T::random_range(self, range.clone()));
+        for index in 0..N {
+            while arr[..index].contains(&arr[index]) {
+                arr[index] = T::random_range(self, range.clone());
+            }
+        }
+        arr
+    }
+
+    /// Creates an iterator that yields an infinite sequence of random values of type `T`.
+    ///
+    /// The iterator repeatedly calls the `Random` trait implementation for type `T`
+    /// using this RNG instance.
+    ///
+    /// # Example
+    /// ```rust, ignore
+    /// # use randy::C64Rng;
+    /// let rng = C64Rng::new();
+    /// let numbers: Vec<u32> = rng.iter().take(3).collect();
+    /// println!("{numbers:?}");
+    /// ```
+    pub fn iter<T>(&self) -> impl Iterator<Item = T> + '_
+    where
+        T: Random<Self>,
+    {
+        std::iter::from_fn(move || Some(T::random(self)))
+    }
+
+    /// Initializes a new RNG.
+    ///
+    /// In release builds, the state is seeded with `std::hash::RandomState`. In debug builds, the
+    /// state is set to a constant to make tests reproducible. Use [`Rng::reseed`] to set an
+    /// explicit seed and ensure deterministic output across builds.
+    ///
+    /// # Example
+    /// ```rust, ignore
+    /// # use randy::C64Rng;
+    /// let rng = C64Rng::new();
+    /// let x: u32 = rng.random();
+    /// println!("{x}");
+    /// ```
+    pub fn new() -> Self {
+        Self { core: C::new() }
+    }
+
+    /// Returns a random value of type `T`. For integers, the value is in the range `[T::MIN,
+    /// T::MAX]`. For floating-point numbers, the value is in the range `[0, 1)`.
+    ///
+    /// # Example
+    /// ```rust, ignore
+    /// # use randy::C64Rng;
+    /// let rng = C64Rng::new();
+    /// let value: f32 = rng.random();
+    /// println!("{value:?}");
+    /// ```
+    pub fn random<T>(&self) -> T
+    where
+        T: Random<Self>,
+    {
+        T::random(self)
+    }
+
+    /// Initializes the RNG with the given `seed`.
+    ///
+    /// Setting `seed` to 0 will cause the RNG to be seeded with a value from
+    /// [`std::hash::RandomState`], which is not reproducible across builds or platforms. Any
+    /// other seed value will produce deterministic output across builds and platforms.
+    ///
+    /// # Example
+    /// ```rust, ignore
+    /// # use randy::C64Rng;
+    /// let rng = C64Rng::new();
+    ///
+    /// rng.reseed(1234);
+    /// let x: u32 = rng.random();
+    ///
+    /// assert_eq!(x, 0xB0333BFC);
+    /// ```
+    pub fn reseed(&self, mut seed: u64) {
+        if seed == 0 {
+            seed = RandomState::new().hash_one("randy");
+        }
+        self.core.reseed(seed);
+    }
+
+    /// Shuffles the elements of the slice `data` using the Fisher-Yates algorithm.
+    ///
+    /// # Example
+    /// ```rust, ignore
+    /// # use randy::C64Rng;
+    /// let rng = C64Rng::new();
+    /// let mut data = [1, 2, 3, 4, 5];
+    /// rng.shuffle(&mut data);
+    /// println!("{data:?}");
+    /// ```
+    pub fn shuffle<T>(&self, data: &mut [T])
+    where
+        usize: RandomRange<Self>,
+    {
+        let mut end = data.len();
+        while end > 1 {
+            let other = usize::random_range(self, 0..end);
+            data.swap(end - 1, other);
+            end -= 1;
+        }
+    }
+
+    /// Returns an iterator that yields mutable references to elements from `data` in random
+    /// order.
+    ///
+    /// The iterator shuffles lazily: each call to [`Iterator::next`] performs one step of the
+    /// Fisher-Yates algorithm and returns the selected element as a mutable reference. The slice
+    /// is modified in place, and if the iterator is exhausted, it will be fully shuffled. This is
+    /// useful when only a few randomly ordered elements are needed from a large slice, since the
+    /// remaining elements do not need to be shuffled eagerly. For shuffling the entire slice,
+    /// consider using the [`shuffle`] method instead.
+    ///
+    /// # Example
+    /// ```rust, ignore
+    /// # use randy::C64Rng;
+    /// let rng = C64Rng::new();
+    /// let mut data = [1, 2, 3, 4];
+    /// for value in rng.shuffle_iter(&mut data) {
+    ///     *value *= 2;
+    /// }
+    ///
+    /// assert!(data.iter().all(|value| value % 2 == 0));
+    /// ```
+    pub fn shuffle_iter<'a, T>(&'a self, data: &'a mut [T]) -> ShuffleIter<'a, C, T>
+    where
+        usize: RandomRange<Self>,
+    {
+        ShuffleIter {
+            rng: self,
+            remaining: data,
+        }
+    }
+
+    /// Splits a new RNG instance from the current one. The new instance will have a different,
+    /// deterministic state based on the current state of the RNG.
+    pub fn split(&self) -> Self {
+        let mut seed = self.u64();
+        seed ^= wyhash64(seed.wrapping_add(INC_64));
+        let core = C::with_seed(seed);
+        Self { core }
+    }
+
+    /// Returns the next `u64` value from the pseudorandom sequence.
+    pub(crate) fn u64(&self) -> u64 {
+        self.core.u64()
+    }
+
+    /// Creates a new uniform selector that picks a random element from a stream of observed
+    /// elements with uniform probability.
+    ///
+    /// # Example
+    /// ```rust, ignore
+    /// # use randy::C64Rng;
+    /// let rng = C64Rng::new();
+    /// let mut selector = rng.uniform_selector();
+    /// let values = [1, 2, 3];
+    /// for x in &values {
+    ///     selector.observe(x);
+    /// }
+    ///
+    /// assert!(matches!(selector.selected(), Some(&1 | &2 | &3)));
+    /// ```
+    pub fn uniform_selector<T>(&self) -> UniformSelector<C, T> {
+        UniformSelector {
+            rng: self.split(),
+            seen: 0,
+            selected: None,
+        }
+    }
+
+    /// Creates a new weighted selector that picks a random element from a stream of observed
+    /// elements with probability proportional to the positive finite weight returned by
+    /// `weight_fn`.
+    ///
+    /// Weights that are zero, negative, `NaN`, or infinite are ignored.
+    ///
+    /// # Example
+    /// ```rust, ignore
+    /// # use randy::C64Rng;
+    /// let rng = C64Rng::new();
+    /// let mut selector = rng.weighted_selector(|value: &i32| *value as f64);
+    /// for value in [1, 2, 3] {
+    ///     selector.observe(value);
+    /// }
+    ///
+    /// assert!(matches!(selector.selected(), Some(&1 | &2 | &3)));
+    /// ```
+    pub fn weighted_selector<T, F>(&self, weight_fn: F) -> WeightedSelector<C, T, F> {
+        WeightedSelector {
+            rng: self.split(),
+            weight_fn,
+            sum: 0.0,
+            c: 0.0,
+            selected: None,
+        }
+    }
+
+    /// Creates a new RNG instance with the given seed. This is a convenience method that combines
+    /// [`Rng::new`] and [`Rng::reseed`].
+    ///
+    /// Setting `seed` to 0 will cause the RNG to be seeded with a value from
+    /// [`std::hash::RandomState`], which is not reproducible across builds or platforms. Any
+    /// other seed value will produce deterministic output across builds and platforms.
+    pub fn with_seed(seed: u64) -> Self {
+        let core = C::new();
+        core.reseed(seed);
+        Self { core }
+    }
+}
+
+impl<C: Core> Default for Rng<C> {
+    /// Returns a new instance of `RngCore`.
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl<C: Core> Generator<u64> for Rng<C> {
+    fn generate(&self) -> u64 {
+        self.u64()
+    }
+}
+
+impl<'a, C: Core, T> Iterator for ShuffleIter<'a, C, T>
+where
+    usize: RandomRange<Rng<C>>,
+{
+    type Item = &'a mut T;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let len = self.remaining.len();
+        if len == 0 {
+            return None;
+        }
+
+        let index = usize::random_range(self.rng, 0..len);
+        self.remaining.swap(index, len - 1);
+
+        let remaining = core::mem::take(&mut self.remaining);
+        let (item, prefix) = remaining.split_last_mut().unwrap();
+        self.remaining = prefix;
+        Some(item)
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        let len = self.remaining.len();
+        (len, Some(len))
+    }
+}
+
+impl<'a, C: Core, T> ExactSizeIterator for ShuffleIter<'a, C, T> where usize: RandomRange<Rng<C>> {}
+
+impl<C: Core, T> UniformSelector<C, T>
+where
+    usize: RandomRange<Rng<C>>,
+{
+    /// Observes the next element in the stream, selecting it with probability `1 / seen` if it is
+    /// the `seen`-th element observed so far. This implements the reservoir sampling algorithm.
+    pub fn observe(&mut self, element: T) {
+        self.seen += 1;
+        if self.rng.bounded(..self.seen) == 0 {
+            self.selected = Some(element);
+        }
+    }
+
+    /// Resets the selector to its initial state, forgetting all previously observed elements.
+    pub fn reset(&mut self) {
+        self.seen = 0;
+        self.selected = None;
+    }
+
+    /// Returns a reference to the currently selected element, or `None` if no elements have been
+    /// considered.
+    pub fn selected(&self) -> Option<&T> {
+        self.selected.as_ref()
+    }
+}
+
+impl<C: Core, T, F> WeightedSelector<C, T, F>
+where
+    F: FnMut(&T) -> f64,
+    f64: Random<Rng<C>>,
+{
+    /// Observes the next element in the stream, selecting it with probability proportional to its
+    /// weight among all positive finite weights seen so far.
+    pub fn observe(&mut self, element: T) {
+        let weight = (self.weight_fn)(&element);
+        if !weight.is_finite() || weight <= 0.0 {
+            return;
+        }
+
+        let t = self.sum + weight;
+        self.c += if self.sum >= weight {
+            (self.sum - t) + weight
+        } else {
+            (weight - t) + self.sum
+        };
+        self.sum = t;
+
+        let total = self.sum + self.c;
+        if f64::random(&self.rng) * total < weight {
+            self.selected = Some(element);
+        }
+    }
+
+    /// Resets the selector to its initial state, forgetting all previously observed elements.
+    pub fn reset(&mut self) {
+        self.sum = 0.0;
+        self.c = 0.0;
+        self.selected = None;
+    }
+
+    /// Returns a reference to the currently selected element, or `None` if no valid elements have
+    /// been considered.
+    pub fn selected(&self) -> Option<&T> {
+        self.selected.as_ref()
+    }
+}
+
+impl<C, T> Deref for UniformSelector<C, T> {
+    type Target = Option<T>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.selected
+    }
+}
+
+impl<C, T> From<UniformSelector<C, T>> for Option<T> {
+    fn from(selector: UniformSelector<C, T>) -> Self {
+        selector.selected
+    }
+}
+
+impl<C, T, F> Deref for WeightedSelector<C, T, F> {
+    type Target = Option<T>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.selected
+    }
+}
+
+impl<C, T, F> From<WeightedSelector<C, T, F>> for Option<T> {
+    fn from(selector: WeightedSelector<C, T, F>) -> Self {
+        selector.selected
+    }
+}
 
 /// The increment used to update the state of the RNG. This value was selected so that it is
 /// coprime to 2^64, and `INCREMENT / 2^64` is approximately `phi - 1`, where `phi` is the
@@ -37,365 +793,75 @@ use std::{
 /// print(f"Coprime of n = {n} closest to n * {phi - 1} ≈  is {c}")
 /// print(f"The ratio is {c / n}")
 /// ```
-pub(crate) const INCREMENT: u64 = 0x9E3779B97F4A7FFF;
+pub(crate) const INC_64: u64 = 0x9E3779B97F4A7FFF;
 
 // These constants, like the `INCREMENT` constant, are coprime to 2^64.
-const ALPHA: u128 = 0x11F9ADBB8F8DA6FFF;
-const BETA: u128 = 0x1E3DF208C6781EFFF;
+const ALPHA_64: u128 = 0x11F9ADBB8F8DA6FFF;
+const BETA_64: u128 = 0x1E3DF208C6781EFFF;
 
-#[allow(dead_code)]
-/// A global instance of an `AtomicRng` that can be accessed from multiple threads.
-pub static RNG: LazyLock<AtomicRng> = LazyLock::new(AtomicRng::new);
+// 128-bit constants for the 128-bit state version of the RNG.
+pub(crate) const INC_128: u128 = 0x9E3779B97F4A7C15F39CC0605CEDC835;
+const ALPHA_128: u128 = 0x1F9ADC86AB04FFFA23B77253D075F74F;
+const BETA_128: u128 = 0xE3DF221099CC4003A4D4C4B52AAE2E09;
 
-/// A thread-safe random number generator that uses atomics to update its state.
-/// Suitable for concurrent environments, this RNG can be shared safely across threads
-/// without requiring mutable references.
-#[derive(Debug)]
-pub struct AtomicRng {
-    /// The current state of the RNG.
-    pub(crate) state: AtomicU64,
-}
-
-/// A random number generator designed for single-threaded contexts.
-/// This type avoids the need for mutable references while delivering performance
-/// comparable to traditional mutable RNGs.
-#[derive(Debug)]
-pub struct Rng {
-    /// The current state of the RNG.
-    pub(crate) state: Cell<u64>,
-}
-
-#[allow(dead_code)]
-impl AtomicRng {
-    /// Generates a random value of type `T` within the specified range. For example, `10..20`
-    /// returns a value between 10 (inclusive) and 20 (exclusive).
-    ///
-    /// # Example
-    /// ```
-    /// # use randy::AtomicRng;
-    /// let rng = AtomicRng::new();
-    /// let value: u32 = rng.bounded(10..20);
-    /// assert!(value >= 10 && value < 20);
-    /// ```
-    pub fn bounded<T, R>(&self, range: R) -> T
-    where
-        T: RandomRange<Self>,
-        R: RangeBounds<T>,
+fn seed() -> u64 {
+    #[cfg(not(debug_assertions))]
     {
-        T::random_range(self, range)
+        RandomState::new().hash_one("foo")
     }
-
-    /// Fills the slice `data` with random bytes
-    pub fn bytes(&self, data: &mut [u8]) {
-        const CHUNK_SIZE: usize = std::mem::size_of::<u64>();
-        for chunk in data.chunks_exact_mut(CHUNK_SIZE) {
-            let value = self.u64();
-            chunk.copy_from_slice(&value.to_ne_bytes());
-        }
-        let last = (data.len() / CHUNK_SIZE) * CHUNK_SIZE;
-        let bytes = self.u64().to_ne_bytes();
-        for (index, byte) in data[last..].iter_mut().enumerate() {
-            *byte = bytes[index];
-        }
-    }
-
-    /// Chooses a random element from the slice `data` and returns a reference to it. If the slice
-    /// is empty, returns `None`.
-    ///
-    /// # Example
-    /// ```
-    /// # use randy::AtomicRng;
-    /// let rng = AtomicRng::new();
-    /// let data = [1, 2, 3, 4, 5];
-    /// let value = rng.choose(&data);
-    /// println!("{value:?}");
-    /// ```
-    pub fn choose<'a, T>(&'a self, data: &'a [T]) -> Option<&'a T> {
-        if data.is_empty() {
-            None
-        } else {
-            let index = usize::random_range(self, 0..data.len());
-            Some(&data[index])
-        }
-    }
-
-    /// Initializes a new RNG. In release builds, the state is seeded with `std::hash::RandomState`.
-    /// In debug builds, the state is set to a constant to make tests reproducible.
-    ///
-    /// # Example
-    /// ```
-    /// # use randy::AtomicRng;
-    /// let rng = AtomicRng::new();
-    /// let x: u32 = rng.random();
-    /// println!("{x}");
-    /// ```
-    pub fn new() -> Self {
-        let seed = {
-            #[cfg(not(debug_assertions))]
-            {
-                use std::hash::{BuildHasher, RandomState};
-                RandomState::new().hash_one("foo")
-            }
-            #[cfg(debug_assertions)]
-            1234
-        };
-        let state = AtomicU64::new(seed);
-        Self { state }
-    }
-
-    /// Returns a random value of type `T`. For integers, the value is in the range `[T::MIN,
-    /// T::MAX]`. For floating-point numbers, the value is in the range `[0, 1)`.
-    ///
-    /// # Example
-    /// ```
-    /// # use randy::AtomicRng;
-    /// let rng = AtomicRng::new();
-    /// let value: f32 = rng.random();
-    /// println!("{value:?}");
-    /// ```
-    pub fn random<T>(&self) -> T
-    where
-        T: Random<Self>,
-    {
-        T::random(self)
-    }
-
-    /// Initializes the RNG with the given `seed`.
-    ///
-    /// Note that because there is always effectively just one instance of the RNG, this method
-    /// reseeds the RNG globally.
-    ///
-    /// # Example
-    /// ```
-    /// # use randy::AtomicRng;
-    /// let rng = AtomicRng::new();
-    ///
-    /// rng.reseed(1234);
-    /// let x: u32 = rng.random();
-    ///
-    /// assert_eq!(x, 0xB0333BFC);
-    /// ```
-    pub fn reseed(&self, seed: u64) {
-        self.state.store(seed, Ordering::Relaxed);
-    }
-
-    /// Shuffles the elements of the slice `data` using the Fisher-Yates algorithm.
-    ///
-    /// # Example
-    /// ```
-    /// # use randy::AtomicRng;
-    /// let rng = AtomicRng::new();
-    /// let mut data = [1, 2, 3, 4, 5];
-    /// rng.shuffle(&mut data);
-    /// println!("{data:?}");
-    /// ```
-    pub fn shuffle<T>(&self, data: &mut [T])
-    where
-        usize: RandomRange<Self>,
-    {
-        let mut end = data.len();
-        while end > 1 {
-            let other = usize::random_range(self, 0..end);
-            data.swap(end - 1, other);
-            end -= 1;
-        }
-    }
-
-    /// Returns the next `u64` value from the pseudorandom sequence.
-    pub(crate) fn u64(&self) -> u64 {
-        // Read the current state and increment it
-        let old_state = self.state.fetch_add(INCREMENT, Ordering::Relaxed);
-
-        // Hash the old state to produce the next value
-        wyhash(old_state)
-    }
-}
-
-#[allow(dead_code)]
-impl Rng {
-    /// Generates a random value of type `T` within the specified range. For example, `10..20`
-    /// returns a value between 10 (inclusive) and 20 (exclusive).
-    ///
-    /// # Example
-    /// ```
-    /// # use randy::Rng;
-    /// let rng = Rng::new();
-    /// let value: u32 = rng.bounded(10..20);
-    /// assert!(value >= 10 && value < 20);
-    /// ```
-    pub fn bounded<T, R>(&self, range: R) -> T
-    where
-        T: RandomRange<Self>,
-        R: RangeBounds<T>,
-    {
-        T::random_range(self, range)
-    }
-
-    /// Fills the slice `data` with random bytes
-    pub fn bytes(&self, data: &mut [u8]) {
-        const CHUNK_SIZE: usize = std::mem::size_of::<u64>();
-        for chunk in data.chunks_exact_mut(CHUNK_SIZE) {
-            let value = self.u64();
-            chunk.copy_from_slice(&value.to_ne_bytes());
-        }
-        let last = (data.len() / CHUNK_SIZE) * CHUNK_SIZE;
-        let bytes = self.u64().to_ne_bytes();
-        for (index, byte) in data[last..].iter_mut().enumerate() {
-            *byte = bytes[index];
-        }
-    }
-
-    /// Chooses a random element from the slice `data` and returns a reference to it. If the slice
-    /// is empty, returns `None`.
-    ///
-    /// # Example
-    /// ```
-    /// # use randy::Rng;
-    /// let rng = Rng::new();
-    /// let data = [1, 2, 3, 4, 5];
-    /// let value = rng.choose(&data);
-    /// println!("{value:?}");
-    /// ```
-    pub fn choose<'a, T>(&'a self, data: &'a [T]) -> Option<&'a T> {
-        if data.is_empty() {
-            None
-        } else {
-            let index = usize::random_range(self, 0..data.len());
-            Some(&data[index])
-        }
-    }
-
-    /// Initializes a new RNG. In release builds, the state is seeded with `std::hash::RandomState`.
-    /// In debug builds, the state is set to a constant to make tests reproducible.
-    ///
-    /// # Example
-    /// ```
-    /// # use randy::Rng;
-    /// let rng = Rng::new();
-    /// let x: u32 = rng.random();
-    /// println!("{x}");
-    /// ```
-    pub fn new() -> Self {
-        let seed = {
-            #[cfg(not(debug_assertions))]
-            {
-                use std::hash::{BuildHasher, RandomState};
-                RandomState::new().hash_one("foo")
-            }
-            #[cfg(debug_assertions)]
-            1234
-        };
-        let state = Cell::new(seed);
-        Self { state }
-    }
-
-    /// Returns a random value of type `T`. For integers, the value is in the range `[T::MIN,
-    /// T::MAX]`. For floating-point numbers, the value is in the range `[0, 1)`.
-    ///
-    /// # Example
-    /// ```
-    /// # use randy::Rng;
-    /// let rng = Rng::new();
-    /// let value: f32 = rng.random();
-    /// println!("{value:?}");
-    /// ```
-    pub fn random<T>(&self) -> T
-    where
-        T: Random<Self>,
-    {
-        T::random(self)
-    }
-
-    /// Initializes the RNG with the given `seed`.
-    ///
-    /// Note that because there is always effectively just one instance of the RNG, this method
-    /// reseeds the RNG globally.
-    ///
-    /// # Example
-    /// ```
-    /// # use randy::Rng;
-    /// let rng = Rng::new();
-    ///
-    /// rng.reseed(1234);
-    /// let x: u32 = rng.random();
-    ///
-    /// assert_eq!(x, 0xB0333BFC);
-    /// ```
-    pub fn reseed(&self, seed: u64) {
-        self.state.set(seed);
-    }
-
-    /// Shuffles the elements of the slice `data` using the Fisher-Yates algorithm.
-    ///
-    /// # Example
-    /// ```
-    /// # use randy::Rng;
-    /// let rng = Rng::new();
-    /// let mut data = [1, 2, 3, 4, 5];
-    /// rng.shuffle(&mut data);
-    /// println!("{data:?}");
-    /// ```
-    pub fn shuffle<T>(&self, data: &mut [T])
-    where
-        usize: Random<Self>,
-    {
-        let mut end = data.len();
-        while end > 1 {
-            let other = usize::random_range(self, 0..end);
-            data.swap(end - 1, other);
-            end -= 1;
-        }
-    }
-
-    /// Returns the next `u64` value from the pseudorandom sequence.
-    pub(crate) fn u64(&self) -> u64 {
-        // Read the current state and increment it
-        let old_state = self.state.get();
-        self.state.set(old_state.wrapping_add(INCREMENT));
-
-        // Hash the old state to produce the next value
-        wyhash(old_state)
-    }
+    #[cfg(debug_assertions)]
+    1234
 }
 
 #[inline]
-pub(crate) fn wyhash(value: u64) -> u64 {
-    let mut tmp = (value as u128).wrapping_mul(ALPHA);
+/// Shuffles the elements of the slice `data` using the Fisher-Yates algorithm.
+///
+/// # Example
+/// ```rust, ignore
+/// # use randy::shuffle;
+/// let mut data = [1, 2, 3, 4, 5];
+/// shuffle(&mut data);
+/// println!("{data:?}");
+/// ```
+///
+/// This function is a convenience wrapper around the `shuffle` method of the `Rng` type.
+/// Each call to `shuffle` creates a new instance of `Rng`, which may be inefficient if you
+/// need to shuffle multiple slices. In such cases, consider initializing an `Rng` instance
+/// and calling its `shuffle` method directly.
+pub fn shuffle<T>(data: &mut [T]) {
+    let rng = C64Rng::new();
+    rng.shuffle(data);
+}
+
+#[inline]
+pub(crate) fn wyhash64(value: u64) -> u64 {
+    let mut tmp = (value as u128).wrapping_mul(ALPHA_64);
     tmp ^= tmp >> 64;
-    tmp = tmp.wrapping_mul(BETA);
-    ((tmp >> 64) ^ tmp) as _
+    tmp = tmp.wrapping_mul(BETA_64);
+    ((tmp >> 64) ^ tmp) as u64
+}
+
+#[inline]
+pub(crate) fn wyhash128(value: u128) -> u128 {
+    let (p0, p1_base) = value.carrying_mul(ALPHA_128, 0);
+    let p1 = p1_base.wrapping_add(value);
+
+    // Fold, but keep the full 256-bit result as (t0, t1).
+    let t0 = p0 ^ p1;
+    let t1 = p1;
+
+    // Multiply (t1 * 2^128 + t0) by (2^128 + BETA_128), modulo 2^256.
+    let (q0, q1_base) = t0.carrying_mul(BETA_128, 0);
+    let (cross, _) = t1.carrying_mul(BETA_128, 0);
+    let q1 = q1_base.wrapping_add(cross).wrapping_add(t0);
+
+    q0 ^ q1
 }
 
 /// A generator of values of type `T`.
 pub trait Generator<T> {
     /// Generates a value of type `T`.
     fn generate(&self) -> T;
-}
-
-impl Default for AtomicRng {
-    /// Returns a new instance of `Rng`.
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl Generator<u64> for AtomicRng {
-    fn generate(&self) -> u64 {
-        self.u64()
-    }
-}
-
-impl Default for Rng {
-    /// Returns a new instance of `Rng`.
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl Generator<u64> for Rng {
-    fn generate(&self) -> u64 {
-        self.u64()
-    }
 }
 
 pub trait Random<G> {
@@ -517,6 +983,62 @@ where
 {
     fn random(generator: &G) -> Self {
         core::array::from_fn(|_| T::random(generator))
+    }
+}
+
+impl<G> RandomRange<G> for f32
+where
+    f32: Random<G>,
+{
+    fn random_range<R>(generator: &G, range: R) -> Self
+    where
+        R: RangeBounds<Self>,
+    {
+        let low = match range.start_bound() {
+            Bound::Included(&low) => low,
+            Bound::Excluded(&low) => low + Self::EPSILON,
+            Bound::Unbounded => Self::MIN,
+        };
+
+        assert!(
+            range.contains(&low),
+            "cannot generate a value from an empty range"
+        );
+        let width = match range.end_bound() {
+            Bound::Included(&high) => high - low + Self::EPSILON,
+            Bound::Excluded(&high) => high - low,
+            Bound::Unbounded => Self::MAX,
+        };
+        let x = <Self as Random<G>>::random(generator);
+        low + width * x
+    }
+}
+
+impl<G> RandomRange<G> for f64
+where
+    f64: Random<G>,
+{
+    fn random_range<R>(generator: &G, range: R) -> Self
+    where
+        R: RangeBounds<Self>,
+    {
+        let low = match range.start_bound() {
+            Bound::Included(&low) => low,
+            Bound::Excluded(&low) => low + Self::EPSILON,
+            Bound::Unbounded => Self::MIN,
+        };
+
+        assert!(
+            range.contains(&low),
+            "cannot generate a value from an empty range"
+        );
+        let width = match range.end_bound() {
+            Bound::Included(&high) => high - low + Self::EPSILON,
+            Bound::Excluded(&high) => high - low,
+            Bound::Unbounded => Self::MAX,
+        };
+        let x = <Self as Random<G>>::random(generator);
+        low + width * x
     }
 }
 
@@ -747,4 +1269,6 @@ macro_rules! impl_signed_random_range {
 
 impl_int_random!(u8, i8, u16, i16, u32, i32, u64, i64);
 impl_unsigned_random_range!(u8, u16, u16, u32, u32, u64, u64, u128);
-impl_signed_random_range!(i8, u8, i16, u16, i32, u32, i64, u64, i128, u128, isize, usize);
+impl_signed_random_range!(
+    i8, u8, i16, u16, i32, u32, i64, u64, i128, u128, isize, usize
+);

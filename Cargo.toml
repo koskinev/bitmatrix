@@ -1,14 +1,13 @@
 [package]
 name = "bitmatrix"
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
 
 [dependencies]
 
 [profile.release]
 opt-level = 3
 debug = true
-split-debuginfo = '...'  # Platform-specific.
 debug-assertions = false
 overflow-checks = false
 lto = true
