@@ -306,6 +306,24 @@ fn test_try_inverse_roundtrips_block_boundary_matrices() {
 }
 
 #[test]
+fn test_try_inverse_m4ri_matches_gauss_jordan() {
+    for size in [32, 33, 63, 64, 65, 127, 128, 129] {
+        let matrix = BitMatrix::from_fn(size, size, |row, col| {
+            row == col || col == row + 1 || (row + 7 < size && col == row + 7)
+        });
+
+        assert_eq!(matrix.try_inverse_m4ri(), matrix.try_inverse_gauss_jordan());
+    }
+}
+
+#[test]
+fn test_try_inverse_m4ri_returns_none_for_singular_matrix() {
+    let matrix = BitMatrix::from_fn(40, 40, |row, col| row != 0 && row == col);
+
+    assert_eq!(matrix.try_inverse_m4ri(), None);
+}
+
+#[test]
 fn test_try_inverse_returns_none_for_singular_matrices() {
     assert_eq!(BitMatrix::new(4, 4).try_inverse(), None);
 

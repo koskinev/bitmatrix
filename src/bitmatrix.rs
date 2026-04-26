@@ -14,6 +14,8 @@ mod tests;
 
 const BLOCK_BITS: usize = 64;
 const BLOCK_MASK: usize = BLOCK_BITS - 1;
+const M4RI_INVERSE_THRESHOLD: usize = 32;
+const M4RI_MAX_STRIPE_BITS: usize = 8;
 
 /// A dynamic bit matrix with GF(2) operations.
 ///
@@ -54,6 +56,25 @@ impl BitMatrix {
     /// ```
     pub fn and(&self, rhs: &Self) -> Self {
         self.zip(rhs, |lhs, rhs| lhs & rhs)
+    }
+
+    /// Builds `[self | I]` for square-matrix inversion.
+    fn augmented_with_identity(&self) -> Self {
+        assert_eq!(self.rows(), self.cols());
+
+        let n = self.rows();
+        let augmented_cols = n
+            .checked_mul(2)
+            .expect("augmented matrix column count overflow");
+        let mut augmented = Self::new(n, augmented_cols);
+        for row in 0..n {
+            for word_col in 0..self.block_cols() {
+                augmented.set_row_word(row, word_col, self.row_word(row, word_col));
+            }
+            augmented.set(row, n + row, 1);
+        }
+
+        augmented
     }
 
     /// Returns the packed 64 by 64 block at the given block coordinates.
@@ -119,6 +140,38 @@ impl BitMatrix {
     /// Returns all packed blocks in block-row-major order for in-place mutation.
     fn blocks_mut(&mut self) -> &mut [[u64; BLOCK_BITS]] {
         &mut self.blocks
+    }
+
+    /// Builds a table of all XOR combinations of the pivot rows for one stripe.
+    fn build_m4ri_row_table(&self, stripe_start: usize, stripe_len: usize) -> Vec<Vec<u64>> {
+        assert!(stripe_len <= M4RI_MAX_STRIPE_BITS);
+
+        let table_len = 1_usize << stripe_len;
+        let start_word = stripe_start / BLOCK_BITS;
+        let start_bit = stripe_start & BLOCK_MASK;
+        let suffix_words = self.block_cols - start_word;
+        let mut table = vec![vec![0; suffix_words]; table_len];
+        let mut current = vec![0; suffix_words];
+        let mut previous_code = 0;
+
+        for index in 1..table_len {
+            let code = gray_code(index);
+            let changed = (code ^ previous_code).trailing_zeros() as usize;
+            let pivot_row = stripe_start + changed;
+
+            for (offset, current_word) in current.iter_mut().enumerate() {
+                let mut word = self.row_word(pivot_row, start_word + offset);
+                if offset == 0 && start_bit != 0 {
+                    word &= !low_bits_mask(start_bit);
+                }
+                *current_word ^= word;
+            }
+
+            table[code].clone_from(&current);
+            previous_code = code;
+        }
+
+        table
     }
 
     /// Clears any bits that live outside the logical matrix dimensions.
@@ -191,6 +244,58 @@ impl BitMatrix {
     /// Returns the logical shape of the matrix as `(rows, cols)`.
     pub fn dimensions(&self) -> (usize, usize) {
         (self.rows, self.cols)
+    }
+
+    /// Establishes identity rows for one M4RI stripe.
+    fn establish_m4ri_pivots(&mut self, stripe_start: usize, stripe_end: usize) -> Option<()> {
+        for pivot in stripe_start..stripe_end {
+            for row in pivot..self.rows {
+                for prev in stripe_start..pivot {
+                    if self.get(row, prev) == 1 {
+                        self.xor_rows_from(row, prev, prev);
+                    }
+                }
+            }
+
+            let pivot_row = (pivot..self.rows).find(|&row| self.get(row, pivot) == 1)?;
+            self.swap_rows(pivot, pivot_row);
+
+            for row in stripe_start..pivot {
+                if self.get(row, pivot) == 1 {
+                    self.xor_rows_from(row, pivot, pivot);
+                }
+            }
+        }
+
+        Some(())
+    }
+
+    /// Creates a matrix with the given dimensions where each logical bit is determined by `f`.
+    ///
+    /// The closure `f` is called once for each logical bit coordinate `(row, col)`, and the
+    /// returned value is treated as a bit where `true` is `1` and `false` is `0`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use bitmatrix::BitMatrix;
+    ///
+    /// let matrix = BitMatrix::from_fn(3, 3, |row, col| row == col);
+    /// let identity = BitMatrix::identity(3);
+    ///
+    /// assert_eq!(matrix, identity);
+    /// ```
+    pub fn from_fn<F>(rows: usize, cols: usize, mut f: F) -> Self
+    where
+        F: FnMut(usize, usize) -> bool,
+    {
+        let mut matrix = Self::new(rows, cols);
+        for row in 0..rows {
+            for col in 0..cols {
+                matrix.set(row, col, f(row, col) as u8);
+            }
+        }
+        matrix
     }
 
     /// Builds a matrix from packed row words.
@@ -270,54 +375,6 @@ impl BitMatrix {
             matrix.set(i, i, 1);
         }
         matrix
-    }
-
-    /// Returns the inverse of this square matrix over GF(2), if it exists.
-    ///
-    /// The matrix must be square. Singular matrices return `None`.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use bitmatrix::BitMatrix;
-    ///
-    /// let matrix = BitMatrix::from_rows([[0b01], [0b11]], 2);
-    /// let inverse = matrix.try_inverse().unwrap();
-    ///
-    /// assert_eq!(matrix.matmul(&inverse), BitMatrix::identity(2));
-    /// assert_eq!(inverse.matmul(&matrix), BitMatrix::identity(2));
-    /// ```
-    pub fn try_inverse(&self) -> Option<Self> {
-        assert_eq!(self.rows(), self.cols());
-
-        let n = self.rows();
-        let mut augmented = Self::new(n, n * 2);
-        for row in 0..n {
-            for word_col in 0..self.block_cols() {
-                augmented.set_row_word(row, word_col, self.row_word(row, word_col));
-            }
-            augmented.set(row, n + row, 1);
-        }
-
-        for pivot in 0..n {
-            let pivot_row = (pivot..n).find(|&row| augmented.get(row, pivot) == 1)?;
-            augmented.swap_rows(pivot, pivot_row);
-
-            for row in 0..n {
-                if row != pivot && augmented.get(row, pivot) == 1 {
-                    augmented.xor_rows_from(row, pivot, pivot);
-                }
-            }
-        }
-
-        let mut inverse = Self::new(n, n);
-        for row in 0..n {
-            for col in 0..n {
-                inverse.set(row, col, augmented.get(row, n + col));
-            }
-        }
-
-        Some(inverse)
     }
 
     /// Returns `true` if either logical dimension is zero.
@@ -458,34 +515,6 @@ impl BitMatrix {
         }
     }
 
-    /// Creates a matrix with the given dimensions where each logical bit is determined by `f`.
-    ///
-    /// The closure `f` is called once for each logical bit coordinate `(row, col)`, and the
-    /// returned value is treated as a bit where `true` is `1` and `false` is `0`.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use bitmatrix::BitMatrix;
-    ///
-    /// let matrix = BitMatrix::from_fn(3, 3, |row, col| row == col);
-    /// let identity = BitMatrix::identity(3);
-    ///
-    /// assert_eq!(matrix, identity);
-    /// ```
-    pub fn from_fn<F>(rows: usize, cols: usize, mut f: F) -> Self
-    where
-        F: FnMut(usize, usize) -> bool,
-    {
-        let mut matrix = Self::new(rows, cols);
-        for row in 0..rows {
-            for col in 0..cols {
-                matrix.set(row, col, f(row, col) as u8);
-            }
-        }
-        matrix
-    }
-
     /// Returns a matrix where each logical bit is inverted.
     ///
     /// This is the non-mutating counterpart to [`BitMatrix::negate`].
@@ -564,9 +593,79 @@ impl BitMatrix {
         *self = resized;
     }
 
+    /// Extracts the right half of an `n` by `2n` augmented matrix.
+    fn right_half(&self) -> Self {
+        assert_eq!(self.cols(), self.rows() * 2);
+
+        let n = self.rows();
+        let mut result = Self::new(n, n);
+        for row in 0..n {
+            for col in 0..n {
+                result.set(row, col, self.get(row, n + col));
+            }
+        }
+
+        result
+    }
+
+    /// Reads up to `usize::BITS` consecutive bits from a logical row.
+    fn row_bits(&self, row: usize, start_col: usize, len: usize) -> usize {
+        assert!(row < self.rows);
+        assert!(start_col + len <= self.cols);
+        assert!(len < usize::BITS as usize);
+
+        let mut bits = 0;
+        for offset in 0..len {
+            bits |= (self.get(row, start_col + offset) as usize) << offset;
+        }
+        bits
+    }
+
+    /// Returns the packed word for a logical row and 64-column word index.
+    fn row_word(&self, row: usize, word_col: usize) -> u64 {
+        assert!(row < self.rows);
+        assert!(word_col < self.block_cols);
+
+        let block_row = row / BLOCK_BITS;
+        let row_in_block = row & BLOCK_MASK;
+        let index = self.block_index(block_row, word_col);
+        self.blocks[index][row_in_block]
+    }
+
     /// Returns the number of logical rows in the matrix.
     pub fn rows(&self) -> usize {
         self.rows
+    }
+
+    /// Reduces the left `rank_cols` columns to RREF using M4RI-style row-combination tables.
+    fn rref_m4ri(&mut self, rank_cols: usize) -> Option<()> {
+        assert!(rank_cols <= self.rows);
+        assert!(rank_cols <= self.cols);
+
+        let stripe_bits = m4ri_stripe_bits(rank_cols);
+        let mut stripe_start = 0;
+        while stripe_start < rank_cols {
+            let stripe_len = stripe_bits.min(rank_cols - stripe_start);
+            let stripe_end = stripe_start + stripe_len;
+
+            self.establish_m4ri_pivots(stripe_start, stripe_end)?;
+            let table = self.build_m4ri_row_table(stripe_start, stripe_len);
+
+            for row in 0..self.rows {
+                if (stripe_start..stripe_end).contains(&row) {
+                    continue;
+                }
+
+                let prefix = self.row_bits(row, stripe_start, stripe_len);
+                if prefix != 0 {
+                    self.xor_row_words_from(row, stripe_start, &table[prefix]);
+                }
+            }
+
+            stripe_start = stripe_end;
+        }
+
+        Some(())
     }
 
     /// Sets the bit at `row`, `col` to `bit & 1`.
@@ -597,6 +696,34 @@ impl BitMatrix {
             self.blocks[index][row_in_block] |= mask;
         } else {
             self.blocks[index][row_in_block] &= !mask;
+        }
+    }
+
+    /// Replaces the packed word for a logical row and 64-column word index.
+    fn set_row_word(&mut self, row: usize, word_col: usize, word: u64) {
+        assert!(row < self.rows);
+        assert!(word_col < self.block_cols);
+
+        let block_row = row / BLOCK_BITS;
+        let row_in_block = row & BLOCK_MASK;
+        let index = self.block_index(block_row, word_col);
+        self.blocks[index][row_in_block] = word;
+    }
+
+    /// Swaps two logical rows in place.
+    fn swap_rows(&mut self, lhs: usize, rhs: usize) {
+        assert!(lhs < self.rows);
+        assert!(rhs < self.rows);
+
+        if lhs == rhs {
+            return;
+        }
+
+        for word_col in 0..self.block_cols {
+            let lhs_word = self.row_word(lhs, word_col);
+            let rhs_word = self.row_word(rhs, word_col);
+            self.set_row_word(lhs, word_col, rhs_word);
+            self.set_row_word(rhs, word_col, lhs_word);
         }
     }
 
@@ -688,6 +815,59 @@ impl BitMatrix {
         result
     }
 
+    /// Returns the inverse of this square matrix over GF(2), if it exists.
+    ///
+    /// The matrix must be square. Singular matrices return `None`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use bitmatrix::BitMatrix;
+    ///
+    /// let matrix = BitMatrix::from_rows([[0b01], [0b11]], 2);
+    /// let inverse = matrix.try_inverse().unwrap();
+    ///
+    /// assert_eq!(matrix.matmul(&inverse), BitMatrix::identity(2));
+    /// assert_eq!(inverse.matmul(&matrix), BitMatrix::identity(2));
+    /// ```
+    pub fn try_inverse(&self) -> Option<Self> {
+        assert_eq!(self.rows(), self.cols());
+
+        if self.rows() >= M4RI_INVERSE_THRESHOLD {
+            self.try_inverse_m4ri()
+        } else {
+            self.try_inverse_gauss_jordan()
+        }
+    }
+
+    /// Returns the inverse using packed Gauss-Jordan elimination.
+    fn try_inverse_gauss_jordan(&self) -> Option<Self> {
+        let n = self.rows();
+        let mut augmented = self.augmented_with_identity();
+
+        for pivot in 0..n {
+            let pivot_row = (pivot..n).find(|&row| augmented.get(row, pivot) == 1)?;
+            augmented.swap_rows(pivot, pivot_row);
+
+            for row in 0..n {
+                if row != pivot && augmented.get(row, pivot) == 1 {
+                    augmented.xor_rows_from(row, pivot, pivot);
+                }
+            }
+        }
+
+        Some(augmented.right_half())
+    }
+
+    /// Returns the inverse using a deterministic M4RI-style full elimination.
+    fn try_inverse_m4ri(&self) -> Option<Self> {
+        let n = self.rows();
+        let mut augmented = self.augmented_with_identity();
+        augmented.rref_m4ri(n)?;
+
+        Some(augmented.right_half())
+    }
+
     /// Returns how many logical columns are present in the given block column.
     fn valid_cols_in_block(&self, block_col: usize) -> usize {
         valid_len_in_block(self.cols, block_col)
@@ -698,42 +878,36 @@ impl BitMatrix {
         valid_len_in_block(self.rows, block_row)
     }
 
-    /// Returns the packed word for a logical row and 64-column word index.
-    fn row_word(&self, row: usize, word_col: usize) -> u64 {
-        assert!(row < self.rows);
-        assert!(word_col < self.block_cols);
-
-        let block_row = row / BLOCK_BITS;
-        let row_in_block = row & BLOCK_MASK;
-        let index = self.block_index(block_row, word_col);
-        self.blocks[index][row_in_block]
+    /// Returns the element-wise bitwise XOR of `self` and `rhs`.
+    ///
+    /// Both matrices must have the same logical dimensions.
+    pub fn xor(&self, rhs: &Self) -> Self {
+        self.zip(rhs, |lhs, rhs| lhs ^ rhs)
     }
 
-    /// Replaces the packed word for a logical row and 64-column word index.
-    fn set_row_word(&mut self, row: usize, word_col: usize, word: u64) {
-        assert!(row < self.rows);
-        assert!(word_col < self.block_cols);
+    /// XORs packed suffix words into `dst` starting at `start_col`.
+    fn xor_row_words_from(&mut self, dst: usize, start_col: usize, words: &[u64]) {
+        assert!(dst < self.rows);
+        assert!(start_col <= self.cols);
 
-        let block_row = row / BLOCK_BITS;
-        let row_in_block = row & BLOCK_MASK;
-        let index = self.block_index(block_row, word_col);
-        self.blocks[index][row_in_block] = word;
-    }
-
-    /// Swaps two logical rows in place.
-    fn swap_rows(&mut self, lhs: usize, rhs: usize) {
-        assert!(lhs < self.rows);
-        assert!(rhs < self.rows);
-
-        if lhs == rhs {
+        if start_col == self.cols {
+            assert!(words.is_empty());
             return;
         }
 
-        for word_col in 0..self.block_cols {
-            let lhs_word = self.row_word(lhs, word_col);
-            let rhs_word = self.row_word(rhs, word_col);
-            self.set_row_word(lhs, word_col, rhs_word);
-            self.set_row_word(rhs, word_col, lhs_word);
+        let start_word = start_col / BLOCK_BITS;
+        let start_bit = start_col & BLOCK_MASK;
+        assert_eq!(words.len(), self.block_cols - start_word);
+
+        for (offset, &word) in words.iter().enumerate() {
+            let mut word = word;
+            if offset == 0 && start_bit != 0 {
+                word &= !low_bits_mask(start_bit);
+            }
+
+            let word_col = start_word + offset;
+            let dst_word = self.row_word(dst, word_col);
+            self.set_row_word(dst, word_col, dst_word ^ word);
         }
     }
 
@@ -758,13 +932,6 @@ impl BitMatrix {
             let dst_word = self.row_word(dst, word_col);
             self.set_row_word(dst, word_col, dst_word ^ src_word);
         }
-    }
-
-    /// Returns the element-wise bitwise XOR of `self` and `rhs`.
-    ///
-    /// Both matrices must have the same logical dimensions.
-    pub fn xor(&self, rhs: &Self) -> Self {
-        self.zip(rhs, |lhs, rhs| lhs ^ rhs)
     }
 
     /// Creates a zero-filled matrix with `rows` rows and `cols` columns.
@@ -1000,6 +1167,15 @@ fn low_bits_mask(bits: usize) -> u64 {
         0 => 0,
         BLOCK_BITS => u64::MAX,
         _ => (1_u64 << bits) - 1,
+    }
+}
+
+/// Returns the stripe width used for M4RI row-combination tables.
+fn m4ri_stripe_bits(rank_cols: usize) -> usize {
+    if rank_cols <= 1 {
+        1
+    } else {
+        ((usize::BITS - rank_cols.leading_zeros() - 1) as usize).clamp(1, M4RI_MAX_STRIPE_BITS)
     }
 }
 
