@@ -25,6 +25,22 @@ fn naive_matmul(lhs: &BitMatrix, rhs: &BitMatrix) -> BitMatrix {
     result
 }
 
+fn naive_matmul_or(lhs: &BitMatrix, rhs: &BitMatrix) -> BitMatrix {
+    assert_eq!(lhs.cols(), rhs.rows());
+
+    let mut result = BitMatrix::new(lhs.rows(), rhs.cols());
+    for row in 0..lhs.rows() {
+        for col in 0..rhs.cols() {
+            let mut bit = 0;
+            for shared in 0..lhs.cols() {
+                bit |= lhs.get(row, shared) & rhs.get(shared, col);
+            }
+            result.set(row, col, bit);
+        }
+    }
+    result
+}
+
 fn patterned(rows: usize, cols: usize) -> BitMatrix {
     let mut matrix = BitMatrix::new(rows, cols);
     for row in 0..rows {
@@ -98,6 +114,7 @@ fn test_empty_matrices_are_supported() {
     let lhs = BitMatrix::new(7, 0);
     let rhs = BitMatrix::new(0, 9);
     assert_eq!(lhs.matmul(&rhs), BitMatrix::new(7, 9));
+    assert_eq!(lhs.matmul_or(&rhs), BitMatrix::new(7, 9));
 }
 
 #[test]
@@ -270,6 +287,50 @@ fn test_matmul_matches_naive_reference_on_odd_dimensions() {
     let expected = naive_matmul(&lhs, &rhs);
 
     assert_same_bits(&actual, &expected);
+}
+
+#[test]
+fn test_matmul_or_identity_handles_rectangular_matrices() {
+    let matrix = patterned(70, 130);
+    let right_identity = BitMatrix::identity(matrix.cols());
+    let left_identity = BitMatrix::identity(matrix.rows());
+
+    assert_eq!(matrix.matmul_or(&right_identity), matrix);
+    assert_eq!(left_identity.matmul_or(&matrix), matrix);
+}
+
+#[test]
+fn test_matmul_or_matches_naive_reference_on_odd_dimensions() {
+    let lhs = patterned(67, 70);
+    let rhs = patterned(70, 65);
+
+    let actual = lhs.matmul_or(&rhs);
+    let expected = naive_matmul_or(&lhs, &rhs);
+
+    assert_same_bits(&actual, &expected);
+}
+
+#[test]
+fn test_matmul_or_matches_naive_reference_across_block_boundaries() {
+    for &(lhs_rows, shared, rhs_cols) in &[(64, 64, 64), (65, 64, 66), (66, 65, 64), (129, 65, 67)]
+    {
+        let lhs = patterned(lhs_rows, shared);
+        let rhs = patterned(shared, rhs_cols);
+
+        let actual = lhs.matmul_or(&rhs);
+        let expected = naive_matmul_or(&lhs, &rhs);
+
+        assert_same_bits(&actual, &expected);
+    }
+}
+
+#[test]
+fn test_matmul_or_preserves_even_overlap_where_gf2_cancels() {
+    let lhs = BitMatrix::from_rows([[0b101]], 3);
+    let rhs = BitMatrix::from_rows([[0b1], [0b0], [0b1]], 1);
+
+    assert_eq!(lhs.matmul(&rhs).get(0, 0), 0);
+    assert_eq!(lhs.matmul_or(&rhs).get(0, 0), 1);
 }
 
 #[test]

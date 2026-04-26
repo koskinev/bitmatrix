@@ -17,7 +17,7 @@ const BLOCK_MASK: usize = BLOCK_BITS - 1;
 const M4RI_INVERSE_THRESHOLD: usize = 32;
 const M4RI_MAX_STRIPE_BITS: usize = 8;
 
-/// A dynamic bit matrix with GF(2) operations.
+/// A dynamic bit matrix with packed logical-bit operations.
 ///
 /// Bits are indexed by logical `(row, col)` coordinates, with each stored `u64` row word using
 /// least-significant-bit-first column numbering inside a 64-bit block.
@@ -485,6 +485,56 @@ impl BitMatrix {
         result
     }
 
+    /// Multiplies `self` by `rhs` over the Boolean OR/AND semiring.
+    ///
+    /// The number of columns in `self` must equal the number of rows in `rhs`. Addition in the
+    /// dot product is OR, so `1 + 1 = 1`, and multiplication is AND.
+    ///
+    /// This differs from [`BitMatrix::matmul`], which uses GF(2) addition and therefore treats
+    /// `1 + 1 = 0`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use bitmatrix::BitMatrix;
+    ///
+    /// let lhs = BitMatrix::from_rows([[0b101]], 3);
+    /// let rhs = BitMatrix::from_rows([[0b1], [0b0], [0b1]], 1);
+    ///
+    /// let product = lhs.matmul_or(&rhs);
+    /// assert_eq!(product.dimensions(), (1, 1));
+    /// assert_eq!(product.get(0, 0), 1);
+    /// assert_eq!(lhs.matmul(&rhs).get(0, 0), 0);
+    /// ```
+    pub fn matmul_or(&self, rhs: &Self) -> Self {
+        assert_eq!(self.cols(), rhs.rows());
+
+        let mut result = Self::new(self.rows(), rhs.cols());
+        for block_row in 0..self.block_rows() {
+            for block_col in 0..rhs.block_cols() {
+                let mut accumulator = [0; 64];
+                for shared_block in 0..self.block_cols() {
+                    let lhs = self
+                        .block(block_row, shared_block)
+                        .expect("valid lhs block coordinates");
+                    let rhs = rhs
+                        .block(shared_block, block_col)
+                        .expect("valid rhs block coordinates");
+                    let product = block_matmul_or(lhs, rhs);
+                    for (acc, prod) in accumulator.iter_mut().zip(&product) {
+                        *acc |= prod;
+                    }
+                }
+                *result
+                    .block_mut(block_row, block_col)
+                    .expect("valid result block coordinates") = accumulator;
+            }
+        }
+
+        result.clear_padding_bits();
+        result
+    }
+
     /// Replaces each logical bit with its bitwise NOT.
     pub fn negate(&mut self) {
         self.map_in_place(|row| !row);
@@ -655,7 +705,6 @@ impl BitMatrix {
                 if (stripe_start..stripe_end).contains(&row) {
                     continue;
                 }
-
                 let prefix = self.row_bits(row, stripe_start, stripe_len);
                 if prefix != 0 {
                     self.xor_row_words_from(row, stripe_start, &table[prefix]);
@@ -1092,6 +1141,42 @@ fn block_matmul(lhs: &[u64; BLOCK_BITS], rhs: &[u64; BLOCK_BITS]) -> [u64; BLOCK
         }
 
         mask <<= STRIPE_BITS;
+        shift += STRIPE_BITS;
+    }
+
+    result
+}
+
+/// Multiplies two packed 64 by 64 blocks over the Boolean OR/AND semiring.
+fn block_matmul_or(lhs: &[u64; BLOCK_BITS], rhs: &[u64; BLOCK_BITS]) -> [u64; BLOCK_BITS] {
+    const STRIPE_BITS: usize = 5;
+    const SUM_TABLE_LEN: usize = 1 << STRIPE_BITS;
+    const STRIPES: usize = BLOCK_BITS.div_ceil(STRIPE_BITS);
+
+    let mut sums = [0; SUM_TABLE_LEN];
+    let mut result = [0; BLOCK_BITS];
+    let mut shift = 0;
+
+    for _ in 0..STRIPES {
+        let stripe_len = (BLOCK_BITS - shift).min(STRIPE_BITS);
+        let table_len = 1 << stripe_len;
+        let stripe_mask = (1_u64 << stripe_len) - 1;
+        let stripe = &rhs[shift..shift + stripe_len];
+
+        // OR cannot undo a row contribution, so build subset combinations directly instead of
+        // using Gray-code incremental XOR updates like the GF(2) kernel does.
+        sums[0] = 0;
+        for subset in 1_usize..table_len {
+            let bit = subset.trailing_zeros() as usize;
+            let remainder = subset & (subset - 1);
+            sums[subset] = sums[remainder] | stripe[bit];
+        }
+
+        for (row_index, row) in lhs.iter().enumerate() {
+            let subset = ((row >> shift) & stripe_mask) as usize;
+            result[row_index] |= sums[subset];
+        }
+
         shift += STRIPE_BITS;
     }
 
