@@ -14,7 +14,7 @@ mod tests;
 
 const BLOCK_BITS: usize = 64;
 const BLOCK_MASK: usize = BLOCK_BITS - 1;
-const M4RI_INVERSE_THRESHOLD: usize = 32;
+const M4RI_INVERSE_THRESHOLD: usize = 512;
 const M4RI_MAX_STRIPE_BITS: usize = 8;
 
 /// A dynamic bit matrix with packed logical-bit operations.

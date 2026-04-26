@@ -5,6 +5,10 @@ edition = "2024"
 
 [dependencies]
 
+[[bench]]
+name = "bitmatrix"
+harness = false
+
 [profile.release]
 opt-level = 3
 debug = true
